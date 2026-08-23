@@ -156,6 +156,29 @@ function runVaultCommand(folder, settings, request) {
 }
 
 /**
+ * Rotate the passphrase of several vaults at once.
+ *
+ * Same terminal path as edit and create, and for the same reason: ansible-vault
+ * asks for the current passphrase and then twice for the new one, so it needs a
+ * tty of its own. Paths are made relative to the workspace folder because that
+ * is the cwd the terminal runs in.
+ *
+ * @param {vscode.WorkspaceFolder} folder
+ * @param {import("./defaults").Settings} settings
+ * @param {{ environment: import("./discovery").Environment, vaultFiles: string[] }} request
+ * @returns {vscode.Terminal}
+ */
+function runVaultRekey(folder, settings, request) {
+  const root = folder.uri.fsPath;
+  const argv = command.buildVaultRekeyArgv({
+    vaultCommand: settings.ansibleVaultCommand,
+    vaultFiles: request.vaultFiles.map((file) => path.relative(root, file)),
+    vaultPasswordFile: resolveVaultPasswordFile(settings, request.environment.name, root),
+  });
+  return runInTerminal(folder, argv, `${VAULT_TERMINAL}: rekey ${request.environment.name}`);
+}
+
+/**
  * Let go of the vault terminals on shutdown. The finished ones are closed; a
  * command still running keeps its terminal, which VS Code takes down with the
  * window anyway -- deactivation is no reason to end an edit in progress.
@@ -174,5 +197,6 @@ module.exports = {
   runInTerminal,
   runPlaybook,
   runVaultCommand,
+  runVaultRekey,
   shellQuote: command.shellQuote,
 };

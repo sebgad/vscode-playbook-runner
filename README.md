@@ -45,11 +45,36 @@ Homelab (activity bar)
 * **Click Env** to open the plain, unencrypted `env.yml` in the editor.
 * **Click Vault** to `ansible-vault edit` it; without a `vault.yml` the row
   reads `create` and runs `ansible-vault create` instead.
+* **Right-click an environment → *Rekey Vaults…*** rotates the passphrase of
+  every vault in that environment in one `ansible-vault rekey`. One environment
+  at a time, because the passphrase is per environment.
 * Production rows are red and ask for confirmation before running
   (`homelab.confirmProduction`).
 * The command palette offers the same thing without the tree: *Homelab: Run
   Playbook* walks environment → service → playbook as QuickPicks, which is the
   flow the old `run-ansible-playbooks.sh` had with `read -p`.
+
+## Rotating vault passphrases
+
+*Homelab: Rekey Vaults…*, or the same command on an environment's context menu,
+hands every `vault.yml` in that environment to one `ansible-vault rekey`. It
+asks once for the current passphrase and twice for the new one; production asks
+to confirm a second time.
+
+The new passphrase is **never** an argument — `--new-vault-password-file` is
+deliberately not passed, so ansible prompts instead and the passphrase stays out
+of the process table and the shell history. A configured
+`homelab.vaultPasswordFiles` entry is passed as the *current* passphrase only.
+
+Two things the confirmation says, because both are easy to get wrong:
+
+* ansible-vault works through the files one at a time, so a failure part-way
+  leaves some vaults on the new passphrase and the rest on the old one, with
+  nothing in the output marking where it stopped. **Commit the inventory first**
+  — the diff is then the record of how far it got.
+* Rekeying does not touch the password *file* the old passphrase was read from.
+  Update it afterwards, or every later run authenticates with a passphrase the
+  vaults no longer use.
 
 ## Adding a service
 

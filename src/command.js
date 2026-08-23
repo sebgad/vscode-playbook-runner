@@ -144,6 +144,29 @@ function buildVaultArgv(spec) {
 }
 
 /**
+ * Rotating the passphrase of every vault in one environment.
+ *
+ * The *new* passphrase is never an argument. Without --new-vault-password-file
+ * ansible-vault prompts for it, and that is the point: a passphrase on a command
+ * line is readable from the process table by anyone on the box for as long as
+ * the command runs, and would end up in shell history besides.
+ *
+ * One invocation carrying every file rather than one per vault, so the old and
+ * the new passphrase are each typed once instead of once per group.
+ *
+ * @param {{ vaultCommand: string, vaultFiles: string[], vaultPasswordFile?: string | null }} spec
+ * @returns {string[]}
+ */
+function buildVaultRekeyArgv(spec) {
+  return [
+    spec.vaultCommand,
+    "rekey",
+    ...spec.vaultFiles,
+    ...vaultArgs(spec.vaultPasswordFile || null),
+  ];
+}
+
+/**
  * POSIX quoting, also correct in fish: 'it'\''s' concatenates there too.
  *
  * @param {string} value
@@ -174,6 +197,7 @@ module.exports = {
   MAX_VERBOSITY,
   buildPlaybookArgs,
   buildVaultArgv,
+  buildVaultRekeyArgv,
   playbookLabel,
   sanitizeRunOptions,
   shellQuote,

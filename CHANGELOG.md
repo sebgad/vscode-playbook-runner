@@ -2,6 +2,19 @@
 
 ## 0.4.0
 
+* *Homelab: Rekey Vaults…* (`homelab.rekeyVaults`, and the context menu of an
+  environment row) rotates the passphrase of every vault in one environment
+  through a single `ansible-vault rekey`. One environment per invocation: the
+  passphrase is per environment, so rekeying across all of them at once could
+  only mean typing the wrong one into the wrong files.
+* The new passphrase is never passed as an argument —
+  `--new-vault-password-file` is deliberately omitted so ansible prompts for it,
+  keeping it out of the process table and the shell history. A resolved
+  `vaultPasswordFiles` entry is passed as the *current* passphrase only, and the
+  confirmation points out that the file still holds the old one afterwards.
+* The confirmation is shown in every environment, not just production, and warns
+  that a run failing part-way leaves the vaults split between the two
+  passphrases. Production still asks a second time.
 * *Homelab: Create Service Skeleton…* (`homelab.createService`, the ＋ folder
   button in the view title) lays out a new service in one go: `playbooks/<name>/`
   and a `group_vars/<name>/` holding an empty env file in **every** environment.

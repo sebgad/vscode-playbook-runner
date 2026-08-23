@@ -274,8 +274,48 @@ async function confirmProduction(settings, environment, description) {
   return answer === "Run";
 }
 
+/**
+ * The modal shown before rotating vault passphrases.
+ *
+ * Asked in every environment, not only production: rekeying rewrites each vault
+ * in place, and ansible-vault works through the list one file at a time -- a
+ * failure part-way leaves the files it already reached on the new passphrase and
+ * the rest on the old one, with nothing in the output saying where it stopped.
+ *
+ * The password-file warning is the one people actually get caught by: rekeying
+ * does not touch the file the passphrase was read from, so every later run
+ * authenticates with a passphrase the vaults no longer use.
+ *
+ * @param {import("./discovery").Environment} environment
+ * @param {number} count
+ * @param {string | null} passwordFile
+ * @returns {Promise<boolean>}
+ */
+async function confirmRekey(environment, count, passwordFile) {
+  const detail = [
+    `All ${count} vault${count === 1 ? "" : "s"} in ${environment.name} are rewritten in place.`,
+    "",
+    "ansible-vault asks for the current passphrase, then the new one twice.",
+    "",
+    "If it fails part-way the vaults are left split between the old and the new passphrase, so commit the inventory first — the diff is then the record of how far it got.",
+    passwordFile
+      ? `\nAfterwards, update ${passwordFile}: it still holds the old passphrase, and every later run reads it.`
+      : "",
+  ]
+    .filter((line, index, all) => line !== "" || all[index - 1] !== "")
+    .join("\n");
+
+  const answer = await vscode.window.showWarningMessage(
+    `Rotate the vault passphrase for ${environment.name}?`,
+    { modal: true, detail },
+    "Rekey",
+  );
+  return answer === "Rekey";
+}
+
 module.exports = {
   confirmProduction,
+  confirmRekey,
   pickEnvironment,
   pickFolder,
   pickPlaybook,

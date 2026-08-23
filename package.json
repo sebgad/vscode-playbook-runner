@@ -116,6 +116,12 @@
         "icon": "$(add)"
       },
       {
+        "command": "homelab.rekeyVaults",
+        "title": "Rekey Vaults…",
+        "category": "Homelab",
+        "icon": "$(key)"
+      },
+      {
         "command": "homelab.openPlaybook",
         "title": "Open Playbook",
         "category": "Homelab",
@@ -193,6 +199,11 @@
           "command": "homelab.runPlaybook",
           "when": "view == homelabExplorer && viewItem == homelab.environment",
           "group": "inline"
+        },
+        {
+          "command": "homelab.rekeyVaults",
+          "when": "view == homelabExplorer && viewItem == homelab.environment",
+          "group": "navigation@1"
         },
         {
           "command": "homelab.createService",

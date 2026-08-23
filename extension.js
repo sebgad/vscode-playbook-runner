@@ -13,7 +13,8 @@
 const vscode = require("vscode");
 
 const { sanitizeRunOptions } = require("./src/command");
-const { findEnvironments } = require("./src/discovery");
+const { findEnvironments, findVaultGroups } = require("./src/discovery");
+const { resolveVaultPasswordFile } = require("./src/paths");
 const runner = require("./src/runner");
 const pickers = require("./src/pickers");
 const scaffold = require("./src/scaffold");
@@ -237,6 +238,57 @@ async function vaultCommand(argument, action) {
 }
 
 /**
+ * Rotate the passphrase of every vault in one environment.
+ *
+ * One environment per invocation on purpose. The passphrase is per environment
+ * -- homelab.vaultPasswordFiles is keyed by environment name -- so "rekey
+ * everything" is not one operation but one per environment, each with its own
+ * old and new passphrase. Offering it across all of them would only mean typing
+ * the wrong passphrase into the wrong set of files.
+ *
+ * @param {unknown} argument
+ */
+async function rekeyVaultsCommand(argument) {
+  const node = asCommandNode(argument);
+  const resolved = await resolveContext(node);
+  if (!resolved) {
+    return;
+  }
+  const { folder, settings, environment } = resolved;
+
+  const vaultFiles = findVaultGroups(environment, settings)
+    .filter((group) => group.hasVault)
+    .map((group) => group.vaultFile);
+  if (!vaultFiles.length) {
+    vscode.window.showErrorMessage(
+      `Homelab: no ${settings.vaultFileName} in ${environment.name} to rekey.`,
+    );
+    return;
+  }
+
+  const passwordFile = resolveVaultPasswordFile(
+    settings,
+    environment.name,
+    folder.uri.fsPath,
+  );
+  if (!(await pickers.confirmRekey(environment, vaultFiles.length, passwordFile))) {
+    return;
+  }
+  const label = `a rekey of ${vaultFiles.length} vault${vaultFiles.length === 1 ? "" : "s"}`;
+  if (!(await pickers.confirmProduction(settings, environment, label))) {
+    return;
+  }
+
+  try {
+    runner.runVaultRekey(folder, settings, { environment, vaultFiles });
+  } catch (err) {
+    vscode.window.showErrorMessage(
+      `Homelab: could not rekey the vaults of ${environment.name}: ${messageOf(err)}`,
+    );
+  }
+}
+
+/**
  * @param {unknown} argument
  * @param {"playbookFile" | "envFile"} key
  */
@@ -393,6 +445,7 @@ function activate(context) {
     register("homelab.rerunLast", () => rerunLast(context)),
     register("homelab.editVault", (node) => vaultCommand(node, "edit")),
     register("homelab.createVault", (node) => vaultCommand(node, "create")),
+    register("homelab.rekeyVaults", (node) => rekeyVaultsCommand(node)),
     register("homelab.openPlaybook", (node) => openFile(node, "playbookFile")),
     register("homelab.openEnv", (node) => openFile(node, "envFile")),
     register("homelab.createService", (node) => createServiceSkeleton(node, refresh)),

@@ -12,6 +12,7 @@ const { describe, it } = require("node:test");
 const {
   buildPlaybookArgs,
   buildVaultArgv,
+  buildVaultRekeyArgv,
   playbookLabel,
   sanitizeRunOptions,
   shellQuote,
@@ -140,6 +141,60 @@ describe("buildVaultArgv", () => {
       }),
       ["ansible-vault", "create", "v.yml", "--vault-password-file", "/p"],
     );
+  });
+});
+
+describe("buildVaultRekeyArgv", () => {
+  it("carries every vault in one invocation", () => {
+    assert.deepEqual(
+      buildVaultRekeyArgv({
+        vaultCommand: "ansible-vault",
+        vaultFiles: [
+          "inventories/production/group_vars/authentik/vault.yml",
+          "inventories/production/group_vars/immich/vault.yml",
+        ],
+        vaultPasswordFile: null,
+      }),
+      [
+        "ansible-vault",
+        "rekey",
+        "inventories/production/group_vars/authentik/vault.yml",
+        "inventories/production/group_vars/immich/vault.yml",
+        "--ask-vault-password",
+      ],
+    );
+  });
+
+  it("passes the resolved password file as the *current* passphrase", () => {
+    assert.deepEqual(
+      buildVaultRekeyArgv({
+        vaultCommand: "ansible-vault",
+        vaultFiles: ["v.yml"],
+        vaultPasswordFile: "/home/user/.ansible-vault/staging.pass",
+      }),
+      ["ansible-vault", "rekey", "v.yml", "--vault-password-file", "/home/user/.ansible-vault/staging.pass"],
+    );
+  });
+
+  it("never puts the new passphrase on the command line", () => {
+    // --new-vault-password-file is deliberately absent: ansible-vault prompts,
+    // so the new passphrase never reaches the process table or shell history.
+    const argv = buildVaultRekeyArgv({
+      vaultCommand: "ansible-vault",
+      vaultFiles: ["v.yml"],
+      vaultPasswordFile: "/p",
+    });
+    assert.ok(!argv.some((arg) => arg.startsWith("--new-vault")));
+  });
+
+  it("honours a wrapper command", () => {
+    const argv = buildVaultRekeyArgv({
+      vaultCommand: "uv-run-ansible-vault",
+      vaultFiles: ["v.yml"],
+      vaultPasswordFile: null,
+    });
+    assert.equal(argv[0], "uv-run-ansible-vault");
+    assert.equal(argv[1], "rekey");
   });
 });
 
