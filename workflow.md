@@ -1,0 +1,286 @@
+# Workflow — folding the shell scripts into the extension
+
+> **Status: done.** This is the historical plan. The migration is complete: the
+> three shell scripts and `.vscode/tasks.json` have since been deleted, so the
+> "today" column below describes how things were before the extension, not now.
+
+Plan for turning `scripts/vscode-extension` from a *tasks.json viewer* into a
+self-contained Ansible front end that discovers everything from the filesystem.
+
+## 1. Where we are
+
+| Piece | What it does today | Hardcoded |
+| --- | --- | --- |
+| `extension.js` | Reads `.vscode/tasks.json`, renders a flat tree, hands every click back to VS Code's task runner. | — (it owns no logic) |
+| `.vscode/tasks.json` | 9 task entries, one per environment × operation combination. | `staging`/`production`, `~/.ansible-vault/staging.pass`, the three script paths |
+| `run-ansible-playbooks.sh` | `read -p` prompts: environment → playbook folder → playbook file, then builds the `ansible-playbook` command. | `staging`/`production` menu, `inventories/$ENV/hosts.ini` |
+| `edit-ansible-vaults.sh` | Prompts environment → vault, runs `ansible-vault edit`. | same two env names, `group_vars`, `vault.yml` |
+| `create-ansible-vaults.sh` | Prompts environment → group, runs `ansible-vault create`. | same |
+
+The scripts already iterate `playbooks/` and `group_vars/` — that part is fine.
+What is fixed is the **environment list** (`1) staging  2) production` in three
+places), the **inventory filename**, and the **vault password file** baked into
+`tasks.json`. The extension itself knows none of this; it only forwards labels.
+
+Repo reality the discovery has to cope with: 2 environments, 21 playbook
+folders holding 1–7 `.yml` files each, and `group_vars` sets that differ between
+environments (`staging` has `authentik_servers`, production does not; several
+groups have `env.yml` but no `vault.yml` yet).
+
+## 2. Target
+
+Everything the three scripts do becomes extension code. The `.sh` files stay as
+the outside-of-VS-Code path. The extension no longer reads `.vscode/tasks.json`
+at all — the sidebar shows only what it discovers itself.
+
+```
+Homelab (activity bar)
+├── production                                    ← discovered, red
+│   ├── authentik                  1
+│   │   ├── Playbooks              1
+│   │   │   └── ▶ authentik.yml
+│   │   ├── ⌥ Env                  (opens env.yml in the editor)
+│   │   └── ✎ Vault
+│   ├── dns_servers                5 · no vault
+│   │   ├── Playbooks              5
+│   │   │   ├── ▶ setup-bind9.yml
+│   │   │   └── ▶ setup-dns-zones.yml
+│   │   ├── ⌥ Env
+│   │   └── + Vault         create (no vault.yml — click creates one)
+│   └── all                                       ← group_vars only
+│       ├── ⌥ Env
+│       └── ✎ Vault
+└── staging                                       ← discovered, blue
+    └── …
+```
+
+The middle level is the **service**: `playbooks/<name>/` and
+`group_vars/<name>/` are the same thing under two directories, so the tree
+joins them on their name instead of splitting the environment into one big
+Playbooks and one big Vaults list. Rows a service has no content for are not
+rendered.
+
+A service has exactly one `env.yml` and one `vault.yml` — fixed filenames, not
+a scan — so *Env* and *Vault* are leaves that act on click. Wrapping a single
+file in a section would be a level that never branches.
+
+Click a playbook → the file opens in the editor. `▶` on the row → runs it with
+that environment's defaults, `⚙` → QuickPick for tags / verbosity / `--check` /
+`--diff` / `--limit`. Click *Vault* → `ansible-vault edit`; click one without a
+`vault.yml` → `ansible-vault create`. Click *Env* → the file opens in the
+editor, since it is not encrypted and there is nothing for ansible to do with
+it.
+
+## 3. Structure
+
+Plain JavaScript, no build step and no dependencies — the symlink install in the
+README keeps working.
+
+```
+scripts/vscode-extension/
+├── extension.js        activate(): wire providers, commands, watchers
+├── src/
+│   ├── defaults.js     setting defaults, shared by settings.js and discovery.js
+│   ├── discovery.js    pure fs scanning — no `require("vscode")`, unit-testable
+│   ├── command.js      ansible argument vectors — likewise vscode-free
+│   ├── settings.js     setting reads + ${workspaceFolder}/${userHome}/${env} expansion
+│   ├── runner.js       executes those commands as a task / in a terminal
+│   ├── tree.js         TreeDataProvider, environment/playbook/vault nodes
+│   └── pickers.js      the QuickPick chain shared by the palette commands
+└── test/
+    ├── discovery.test.js
+    └── command.test.js
+```
+
+Two deviations from the sketch, decided while building: `command.js` was split
+off from `runner.js` so the argument vectors — the part that has to keep
+matching the shell scripts — can be tested without `vscode`; and the fixture
+tree is built in a temp directory by the test rather than committed, which
+keeps it readable in one place instead of spread over a dozen empty files.
+
+## 4. Discovery — the part that removes the fixed paths
+
+`src/discovery.js` exports four functions, all taking a workspace root and the
+resolved settings, none importing `vscode`:
+
+- **`findEnvironments(root)`** — every directory under `inventories/` that
+  contains the inventory file. Returns `{ name, dir, inventory, groupVarsDir }`.
+  Today that yields `production` and `staging`; adding `inventories/lab/` makes
+  a third node appear with no code change. If none qualify the tree shows a
+  single "no environments found under `inventories/`" placeholder rather than
+  failing silently.
+- **`findPlaybooks(root)`** — one entry per subdirectory of `playbooks/`, each
+  with its `*.yml`/`*.yaml` files, sorted; loose top-level playbooks are
+  collected under an implicit "(root)" group. Independent of environment, so it
+  is scanned once and shared by every environment node.
+- **`findVaultGroups(env)`** — directories under
+  `inventories/<env>/group_vars`, each with its `env.yml` and `vault.yml`
+  flagged `hasEnv` / `hasVault`. One list drives edit (`hasVault`), create
+  (`!hasVault`) — replacing the two near-identical scripts — and the Env row.
+- **`findServices(root, env)`** — the two above joined on directory name into
+  `{ name, playbooks, playbooksDir, vars }`, which is what the tree's middle
+  level renders. A *union*, not an intersection: `group_vars/all` has no
+  playbooks and a playbook folder may exist before an environment has any
+  variables for it, and both still deserve a row.
+
+## 5. Running things
+
+`src/runner.js` builds the same argument vectors the scripts do:
+
+```
+ansible-playbook -i <inventory> <playbook>
+                 (--vault-password-file <p> | --ask-vault-password)
+                 [--tags a,b] [-vvv] [--check] [--diff] [--limit h]
+ansible-vault (edit|create) <group_vars/<group>/vault.yml>
+                 (--vault-password-file <p> | --ask-vault-password)
+```
+
+Two execution paths, deliberately:
+
+- **Playbooks → `vscode.tasks.executeTask`** with a `ShellExecution`. Gives the
+  task terminal, *Terminate Task*, *Re-run Last Task* and `presentation`
+  handling for free, and still has a real TTY so `--ask-vault-password`,
+  `become` prompts and SSH key passphrases work.
+- **Vaults → `vscode.window.createTerminal`** (one reused terminal,
+  `Homelab Ansible`). `ansible-vault edit` spawns `$EDITOR` — currently `nano`
+  per `ansible.cfg` — which wants an interactive terminal it fully owns, not a
+  task wrapper.
+
+Arguments are passed as an argv array, so paths with spaces need no manual
+quoting.
+
+**Vault password resolution**, replacing the `staging.pass` literal in
+`tasks.json`: look up `homelab.vaultPasswordFiles[<env>]`, else expand
+`homelab.vaultPasswordFilePattern` (default
+`${userHome}/.ansible-vault/${env}.pass`). If the resolved file exists use
+`--vault-password-file`, otherwise fall back to `--ask-vault-password`. On this
+machine that keeps staging silent and — once `prod.pass` is pointed at — makes
+production silent too, without either name appearing in code.
+
+## 6. Settings
+
+| Setting | Default | Replaces |
+| --- | --- | --- |
+| `homelab.playbooksDir` | `playbooks` | `$SCRIPT_DIR/playbooks` |
+| `homelab.inventoriesDir` | `inventories` | `$SCRIPT_DIR/inventories` |
+| `homelab.inventoryFile` | `hosts.ini` | `inventories/$ENV/hosts.ini` |
+| `homelab.groupVarsDir` | `group_vars` | `$VAULTS_DIR` |
+| `homelab.envFileName` | `env.yml` | — (new; the service's Env row) |
+| `homelab.vaultFileName` | `vault.yml` | `find -name vault.yml` |
+| `homelab.vaultPasswordFilePattern` | `${userHome}/.ansible-vault/${env}.pass` | the `tasks.json` literal |
+| `homelab.vaultPasswordFiles` | `{}` | per-environment override of the pattern |
+| `homelab.productionPattern` | `production` | *(existing)* red styling + confirm |
+| `homelab.confirmProduction` | `true` | — (new safety net; a click on a prod row no longer runs anything, see step 10) |
+| `homelab.ansiblePlaybookCommand` | `ansible-playbook` | — |
+| `homelab.ansibleVaultCommand` | `ansible-vault` | — |
+
+`homelabTasks.productionPattern` is read as a fallback so an existing setting
+keeps working after the rename.
+
+## 7. Commands
+
+| Command | Where |
+| --- | --- |
+| `homelab.runPlaybook` | inline ▶ / palette (QuickPick chain: env → folder → file) |
+| `homelab.runPlaybookWithOptions` | inline ⚙ — tags, verbosity, check, diff, limit |
+| `homelab.rerunLast` | palette; last invocation kept in `workspaceState` |
+| `homelab.editVault` / `homelab.createVault` | the Vault row + palette |
+| `homelab.openEnv` | the Env row — opens `env.yml` in the editor |
+| `homelab.openPlaybook` | click on the row / context menu — open the `.yml` in the editor |
+| `homelab.refresh` | view title |
+
+Palette entries run the same QuickPick chain the tree bypasses, so both the
+browsable and the type-to-run habits are covered by one code path.
+
+## 8. Refresh
+
+`FileSystemWatcher` on `playbooks/**` and `inventories/**`, plus
+`onDidChangeConfiguration` for `homelab.*`. Adding a playbook file updates the
+tree without a reload.
+
+## 9. Sequence — done
+
+1. ✅ tasks.json reader moved to `src/tasksJson.js`, behaviour unchanged.
+   Commands renamed `homelabTasks.*` → `homelab.*`, old ids kept as aliases.
+2. ✅ `src/defaults.js`, `src/discovery.js`, `src/settings.js` + tests.
+3. ✅ `src/command.js` + `src/runner.js`, vault password resolution.
+4. ✅ `src/tree.js`: environment roots, Playbooks/Vaults sections.
+5. ✅ `src/pickers.js`, commands, menus, `package.json`, production
+   confirmation.
+6. ✅ README rewritten.
+7. ✅ tasks.json support dropped again: `src/tasksJson.js`, the Tasks section,
+   `homelab.runTask` / `homelab.openTasksJson` (and their `homelabTasks.*`
+   aliases) and `homelab.showTasksSection` removed. Discovery covers everything
+   the section used to show, so it was only a second way to run the same
+   playbooks. `.vscode/tasks.json` itself is untouched and still works from
+   VS Code's own *Run Task*.
+8. ✅ tree regrouped to environment → service → Playbooks/Vaults:
+   `findServices()` added to discovery, `PlaybookGroupNode` replaced by
+   `ServiceNode`, the two environment-wide sections moved below the service.
+9. ✅ `env.yml` surfaced: `homelab.envFileName` + `hasEnv`/`envFile` on the
+   group_vars group, an *Env* row per service and `homelab.openEnv`. The
+   *Vaults* section became a single *Vault* row that runs edit/create on
+   click — one env and one vault per service means neither needs a level of
+   its own.
+   **Steps 8–9 not run here** — this machine has no `node`, so the new
+   discovery tests are unexecuted.
+10. ✅ a playbook row's click opens the file (`homelab.openPlaybook`) instead of
+    running it. Running is the inline ▶/⚙, which is a deliberate move rather
+    than the one every click makes — the *Env* and *Vault* rows keep acting on
+    click because there is nothing else those rows could mean, while a playbook
+    row is a file first and an action second.
+11. ✅ service skeletons: `src/scaffold.js` + `homelab.createService`. The
+    module is the fifth one that never imports `vscode`, for the same reason as
+    the other four — it decides which paths get written, so `plan` and `create`
+    are separate calls and `test/scaffold.test.js` exercises both. The plan is
+    what the confirmation shows, files are opened `wx` so an existing `env.yml`
+    survives, and no `vault.yml` is planned: an encrypted file is
+    `ansible-vault create`'s job, and the ＋ *Vault* row already offers it once
+    the group_vars directory exists. Creating in **all** environments at once is
+    the point — a service present in `production` and missing from `staging` is
+    the drift this removes — so the command deliberately takes no environment
+    and is not offered on an environment row.
+
+## 10. Verification
+
+Automated (`npm test`, node --test):
+
+- `test/discovery.test.js` — environment detection incl. a directory without an
+  inventory file, playbook grouping, `(root)` group, recursion, `.yaml`, empty
+  folders, the `hasVault` / `hasEnv` flags incl. a custom env filename, missing
+  directories, and the service union (both halves, playbooks-only,
+  vars-only, a vault without an env, per-environment differences).
+- `test/command.test.js` — argument vectors against what the shell scripts
+  produced, verbosity mapping, `--ask-vault-password` fallback, shell quoting.
+- `test/scaffold.test.js` — name validation (separators, leading dot, spaces),
+  the planned entries and their order, a half-existing service, a custom
+  layout, no environments at all, and that carrying out a plan neither
+  truncates an existing `env.yml` nor touches the vault beside it.
+
+Against the real repository, discovery reports what is actually there: 2
+environments, 20 playbook groups / 46 playbooks, 19 existing + 2 creatable
+vaults in production, 13 + 2 in staging, `staging.pass` picked up and
+production falling back to a prompt — i.e. today's behaviour exactly.
+
+Still to do by hand (needs a running editor, and hosts):
+
+- F5 Extension Development Host: the tree renders; a `dns_servers` playbook runs
+  against the right inventory; `ansible-vault edit` opens nano and saves;
+  `create` on a `＋` row writes a new vault; adding a `.yml` refreshes the tree.
+- Dry run without touching hosts: `⚙ → Check` on
+  `playbooks/monitoring/setup-telegraf.yml`.
+- *Create Service Skeleton…* on a throwaway name: the path list matches what
+  appears on disk, the service shows up under both environments with an *Env*
+  and a ＋ *Vault* row, and a second run reports nothing to create.
+
+## 11. Known trade-offs
+
+- **Duplication is now permanent.** The `.sh` scripts and the extension
+  implement the same flow in two languages; a change to the layout means
+  touching both. That is the accepted cost of keeping the scripts usable over
+  SSH.
+- `tasks.json` keeps its hardcoded `staging.pass` and script paths. The
+  extension no longer reads it, so those entries are reachable only through
+  VS Code's own *Run Task* — and drift there will not show up in the sidebar.
+- The extension shells out to `ansible-playbook` on `PATH`; no virtualenv
+  detection. `homelab.ansiblePlaybookCommand` is the escape hatch.

@@ -1,0 +1,12 @@
+# Everything that is development-only. What ships is extension.js, src/,
+# media/, package.json and the README.
+.vscode/**
+.gitignore
+.vscodeignore
+dist/**
+eslint.config.js
+node_modules/**
+test/**
+tsconfig.json
+workflow.md
+**/*.map

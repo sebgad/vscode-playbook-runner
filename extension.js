@@ -1,0 +1,424 @@
+/**
+ * Homelab — an Ansible sidebar for this repository.
+ *
+ * Playbooks, environments and vaults are discovered from the filesystem
+ * (src/discovery.js), so no path, and in particular no environment name, is
+ * written down anywhere in here. The commands below replace the shell scripts
+ * this repository used to keep in scripts/ (run-ansible-playbooks.sh and the two
+ * vault scripts), which have been removed — this is now the only front end.
+ */
+
+"use strict";
+
+const vscode = require("vscode");
+
+const { sanitizeRunOptions } = require("./src/command");
+const { findEnvironments } = require("./src/discovery");
+const runner = require("./src/runner");
+const pickers = require("./src/pickers");
+const scaffold = require("./src/scaffold");
+const { readSettings } = require("./src/settings");
+const { HomelabTreeProvider } = require("./src/tree");
+
+const LAST_RUN_KEY = "homelab.lastRun";
+
+/**
+ * A tree node, as it arrives back through a command argument. Every field is
+ * optional: the same commands are in the palette, where there is no node and
+ * everything gets asked for instead.
+ *
+ * @typedef {object} CommandNode
+ * @property {vscode.WorkspaceFolder} [folder]
+ * @property {import("./src/discovery").Environment} [environment]
+ * @property {string} [playbookFile]
+ * @property {string} [envFile]
+ * @property {string} [vaultFile]
+ * @property {boolean} [hasVault]
+ */
+
+/**
+ * @param {unknown} value
+ * @returns {CommandNode}
+ */
+function asCommandNode(value) {
+  return value && typeof value === "object" ? /** @type {CommandNode} */ (value) : {};
+}
+
+/** @param {unknown} err */
+function messageOf(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * @typedef {object} LastRun
+ * @property {string} folderPath
+ * @property {string} environmentName
+ * @property {string} playbookFile
+ * @property {import("./src/command").RunOptions} options
+ */
+
+/**
+ * The last run as workspace state gave it back. It survives restarts and
+ * upgrades, so it is checked rather than trusted -- see sanitizeRunOptions.
+ *
+ * @param {unknown} value
+ * @returns {LastRun | null}
+ */
+function parseLastRun(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const raw = /** @type {Record<string, unknown>} */ (value);
+  if (
+    typeof raw.folderPath !== "string" ||
+    typeof raw.environmentName !== "string" ||
+    typeof raw.playbookFile !== "string"
+  ) {
+    return null;
+  }
+  return {
+    folderPath: raw.folderPath,
+    environmentName: raw.environmentName,
+    playbookFile: raw.playbookFile,
+    options: sanitizeRunOptions(raw.options),
+  };
+}
+
+/**
+ * Resolve a command invocation to folder + settings + environment, taking what
+ * a tree node already knows and asking for the rest.
+ *
+ * @param {CommandNode} node
+ * @returns {Promise<{ folder: vscode.WorkspaceFolder, settings: import("./src/defaults").Settings, environment: import("./src/discovery").Environment } | null>}
+ */
+async function resolveContext(node) {
+  const folder = node.folder || (await pickers.pickFolder());
+  if (!folder) {
+    return null;
+  }
+  const settings = readSettings(folder);
+
+  const environment = node.environment || (await pickers.pickEnvironment(folder, settings));
+  if (!environment) {
+    return null;
+  }
+
+  return { folder, settings, environment };
+}
+
+/**
+ * @param {vscode.ExtensionContext} context
+ * @param {unknown} argument
+ * @param {boolean} withOptions
+ */
+async function runPlaybookCommand(context, argument, withOptions) {
+  const node = asCommandNode(argument);
+  const resolved = await resolveContext(node);
+  if (!resolved) {
+    return;
+  }
+  const { folder, settings, environment } = resolved;
+
+  const playbookFile =
+    node.playbookFile || (await pickers.pickPlaybook(folder, settings));
+  if (!playbookFile) {
+    return;
+  }
+
+  const label = runner.playbookLabel(folder.uri.fsPath, settings, playbookFile);
+
+  /** @type {import("./src/command").RunOptions} */
+  let options = {};
+  if (withOptions) {
+    const last = parseLastRun(context.workspaceState.get(LAST_RUN_KEY));
+    const previous = last && last.playbookFile === playbookFile ? last.options : {};
+    const picked = await pickers.pickRunOptions(previous);
+    if (!picked) {
+      return;
+    }
+    options = picked;
+  }
+
+  if (!(await pickers.confirmProduction(settings, environment, label))) {
+    return;
+  }
+
+  /** @type {LastRun} */
+  const lastRun = {
+    folderPath: folder.uri.fsPath,
+    environmentName: environment.name,
+    playbookFile,
+    options,
+  };
+  await context.workspaceState.update(LAST_RUN_KEY, lastRun);
+
+  try {
+    await runner.runPlaybook(folder, settings, { environment, playbookFile, options });
+  } catch (err) {
+    vscode.window.showErrorMessage(`Homelab: could not run ${label}: ${messageOf(err)}`);
+  }
+}
+
+/** @param {vscode.ExtensionContext} context */
+async function rerunLast(context) {
+  const last = parseLastRun(context.workspaceState.get(LAST_RUN_KEY));
+  if (!last) {
+    vscode.window.showInformationMessage("Homelab: nothing has been run yet.");
+    return;
+  }
+
+  const folder = (vscode.workspace.workspaceFolders || []).find(
+    (item) => item.uri.fsPath === last.folderPath,
+  );
+  if (!folder) {
+    vscode.window.showErrorMessage("Homelab: the folder of the last run is no longer open.");
+    return;
+  }
+
+  const settings = readSettings(folder);
+  const environment = findEnvironments(folder.uri.fsPath, settings).find(
+    (item) => item.name === last.environmentName,
+  );
+  if (!environment) {
+    vscode.window.showErrorMessage(
+      `Homelab: environment "${last.environmentName}" no longer exists.`,
+    );
+    return;
+  }
+
+  const label = runner.playbookLabel(folder.uri.fsPath, settings, last.playbookFile);
+  if (!(await pickers.confirmProduction(settings, environment, label))) {
+    return;
+  }
+
+  try {
+    await runner.runPlaybook(folder, settings, {
+      environment,
+      playbookFile: last.playbookFile,
+      options: last.options,
+    });
+  } catch (err) {
+    vscode.window.showErrorMessage(`Homelab: could not run ${label}: ${messageOf(err)}`);
+  }
+}
+
+/**
+ * @param {unknown} argument
+ * @param {"edit" | "create"} action
+ */
+async function vaultCommand(argument, action) {
+  const node = asCommandNode(argument);
+  const resolved = await resolveContext(node);
+  if (!resolved) {
+    return;
+  }
+  const { folder, settings, environment } = resolved;
+
+  let vaultFile = node.vaultFile;
+  if (vaultFile && node.hasVault === (action !== "edit")) {
+    // Node came from the other kind of row -- fall back to asking.
+    vaultFile = undefined;
+  }
+  if (!vaultFile) {
+    const group = await pickers.pickVaultGroup(environment, settings, action);
+    if (!group) {
+      return;
+    }
+    vaultFile = group.vaultFile;
+  }
+
+  try {
+    runner.runVaultCommand(folder, settings, { environment, vaultFile, action });
+  } catch (err) {
+    vscode.window.showErrorMessage(
+      `Homelab: could not ${action} the vault: ${messageOf(err)}`,
+    );
+  }
+}
+
+/**
+ * @param {unknown} argument
+ * @param {"playbookFile" | "envFile"} key
+ */
+async function openFile(argument, key) {
+  const file = asCommandNode(argument)[key];
+  if (!file) {
+    return;
+  }
+  try {
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+    await vscode.window.showTextDocument(document);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Homelab: could not open ${file}: ${messageOf(err)}`);
+  }
+}
+
+/**
+ * Lay out the directories of a new service: playbooks/<name>/ once, and a
+ * group_vars/<name>/ with an empty env file in every environment, so a service
+ * cannot end up existing in one environment and missing from another.
+ *
+ * The plan is shown before anything is written, and only what is missing is
+ * created -- an env file that exists is never touched. The vault is left to
+ * `ansible-vault create`, which the tree offers on the new group_vars row.
+ *
+ * @param {unknown} argument
+ * @param {() => void} refresh
+ */
+async function createServiceSkeleton(argument, refresh) {
+  const node = asCommandNode(argument);
+  const folder = node.folder || (await pickers.pickFolder());
+  if (!folder) {
+    return;
+  }
+  const settings = readSettings(folder);
+  const root = folder.uri.fsPath;
+
+  const name = await pickers.pickServiceName(scaffold.existingServiceNames(root, settings));
+  if (!name) {
+    return;
+  }
+
+  /** @type {import("./src/scaffold").SkeletonPlan} */
+  let plan;
+  try {
+    plan = scaffold.planService(root, name, settings);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Homelab: ${messageOf(err)}`);
+    return;
+  }
+
+  const missing = plan.entries.filter((entry) => !entry.exists);
+  if (!missing.length) {
+    vscode.window.showInformationMessage(
+      `Homelab: ${plan.name} already has every directory; nothing to create.`,
+    );
+    return;
+  }
+
+  const detail = missing
+    .map((entry) => (entry.type === "directory" ? `${entry.relative}/` : entry.relative))
+    .join("\n");
+  const note = plan.environments.length
+    ? ""
+    : `\n\nNo environment found under ${settings.inventoriesDir}/, so only the playbook folder is created.`;
+  const answer = await vscode.window.showInformationMessage(
+    `Create the skeleton for ${plan.name}?`,
+    { modal: true, detail: `${detail}${note}` },
+    "Create",
+  );
+  if (answer !== "Create") {
+    return;
+  }
+
+  try {
+    const { created } = scaffold.createSkeleton(plan);
+    refresh();
+    vscode.window.showInformationMessage(
+      `Homelab: created ${created.length} ${created.length === 1 ? "entry" : "entries"} for ${plan.name}.`,
+    );
+  } catch (err) {
+    vscode.window.showErrorMessage(
+      `Homelab: could not create the skeleton for ${plan.name}: ${messageOf(err)}`,
+    );
+  }
+}
+
+/**
+ * The file watchers that keep the tree current.
+ *
+ * They are scoped to each folder's configured playbooks/ and inventories/
+ * rather than the whole workspace, and rebuilt when either of those settings
+ * or the folder list changes -- a watcher on last session's directory would
+ * quietly stop refreshing anything.
+ */
+class Watchers {
+  /** @param {() => void} onChange */
+  constructor(onChange) {
+    this.onChange = onChange;
+    /** @type {vscode.Disposable[]} */
+    this.disposables = [];
+    this.rebuild();
+  }
+
+  rebuild() {
+    this.dispose();
+    for (const folder of vscode.workspace.workspaceFolders || []) {
+      const settings = readSettings(folder);
+      for (const dir of [settings.playbooksDir, settings.inventoriesDir]) {
+        if (!dir) {
+          continue;
+        }
+        const watcher = vscode.workspace.createFileSystemWatcher(
+          new vscode.RelativePattern(folder, `${dir}/**`),
+        );
+        this.disposables.push(
+          watcher,
+          watcher.onDidChange(this.onChange),
+          watcher.onDidCreate(this.onChange),
+          watcher.onDidDelete(this.onChange),
+        );
+      }
+    }
+  }
+
+  dispose() {
+    for (const disposable of this.disposables) {
+      disposable.dispose();
+    }
+    this.disposables = [];
+  }
+}
+
+/** @param {vscode.ExtensionContext} context */
+function activate(context) {
+  const provider = new HomelabTreeProvider();
+  const refresh = () => provider.refresh();
+  const watchers = new Watchers(refresh);
+
+  /**
+   * @param {string} id
+   * @param {(...args: any[]) => any} handler
+   */
+  const register = (id, handler) => vscode.commands.registerCommand(id, handler);
+
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("homelabExplorer", provider),
+    watchers,
+
+    register("homelab.runPlaybook", (node) => runPlaybookCommand(context, node, false)),
+    register("homelab.runPlaybookWithOptions", (node) =>
+      runPlaybookCommand(context, node, true),
+    ),
+    register("homelab.rerunLast", () => rerunLast(context)),
+    register("homelab.editVault", (node) => vaultCommand(node, "edit")),
+    register("homelab.createVault", (node) => vaultCommand(node, "create")),
+    register("homelab.openPlaybook", (node) => openFile(node, "playbookFile")),
+    register("homelab.openEnv", (node) => openFile(node, "envFile")),
+    register("homelab.createService", (node) => createServiceSkeleton(node, refresh)),
+    register("homelab.refresh", refresh),
+
+    // 0.1 command id, kept so existing keybindings keep working.
+    register("homelabTasks.refresh", refresh),
+
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      watchers.rebuild();
+      refresh();
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (
+        event.affectsConfiguration("homelab") ||
+        event.affectsConfiguration("homelabTasks")
+      ) {
+        watchers.rebuild();
+        refresh();
+      }
+    }),
+  );
+}
+
+function deactivate() {
+  runner.dispose();
+}
+
+module.exports = { activate, deactivate };

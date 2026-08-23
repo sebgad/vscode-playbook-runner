@@ -1,0 +1,287 @@
+{
+  "name": "homelab-tasks",
+  "displayName": "Homelab",
+  "description": "Ansible sidebar for the homelab repository: run playbooks and manage vaults, discovered from the filesystem.",
+  "version": "0.4.0",
+  "publisher": "sebgad",
+  "private": true,
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "ansible",
+    "homelab",
+    "playbook",
+    "vault"
+  ],
+  "icon": "media/icon.png",
+  "main": "./extension.js",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test",
+    "check": "npm run lint && npm run typecheck && npm test",
+    "package": "node -e \"require('node:fs').mkdirSync('dist', { recursive: true })\" && vsce package --no-dependencies --allow-missing-repository --out dist/",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^3.2.1",
+    "eslint": "^9.17.0",
+    "globals": "^15.14.0",
+    "typescript": "^5.7.2"
+  },
+  "activationEvents": [],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Playbooks and vaults are run as shell commands in the workspace folder, and the commands used come from settings that a workspace can carry."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Playbooks, inventories and vaults are read from disk and handed to ansible as filesystem paths."
+    }
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "homelab",
+          "title": "Homelab",
+          "icon": "media/ansible.svg"
+        }
+      ]
+    },
+    "views": {
+      "homelab": [
+        {
+          "id": "homelabExplorer",
+          "name": "Ansible"
+        }
+      ]
+    },
+    "taskDefinitions": [
+      {
+        "type": "homelab",
+        "required": [
+          "environment",
+          "playbook"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string",
+            "description": "Name of the inventory environment the playbook runs against."
+          },
+          "playbook": {
+            "type": "string",
+            "description": "Playbook path, relative to the workspace folder."
+          }
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "homelab.runPlaybook",
+        "title": "Run Playbook",
+        "category": "Homelab",
+        "icon": "$(play)"
+      },
+      {
+        "command": "homelab.runPlaybookWithOptions",
+        "title": "Run Playbook with Options…",
+        "category": "Homelab",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "homelab.rerunLast",
+        "title": "Re-run Last Playbook",
+        "category": "Homelab",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "homelab.editVault",
+        "title": "Edit Vault",
+        "category": "Homelab",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "homelab.createVault",
+        "title": "Create Vault",
+        "category": "Homelab",
+        "icon": "$(add)"
+      },
+      {
+        "command": "homelab.openPlaybook",
+        "title": "Open Playbook",
+        "category": "Homelab",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "homelab.openEnv",
+        "title": "Open Env File",
+        "category": "Homelab",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "homelab.createService",
+        "title": "Create Service Skeleton…",
+        "category": "Homelab",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "homelab.refresh",
+        "title": "Refresh",
+        "category": "Homelab",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "homelab.refresh",
+          "when": "view == homelabExplorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "homelab.rerunLast",
+          "when": "view == homelabExplorer",
+          "group": "navigation@2"
+        },
+        {
+          "command": "homelab.createService",
+          "when": "view == homelabExplorer",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "homelab.runPlaybook",
+          "when": "view == homelabExplorer && viewItem == homelab.playbook",
+          "group": "inline@1"
+        },
+        {
+          "command": "homelab.runPlaybookWithOptions",
+          "when": "view == homelabExplorer && viewItem == homelab.playbook",
+          "group": "inline@2"
+        },
+        {
+          "command": "homelab.openPlaybook",
+          "when": "view == homelabExplorer && viewItem == homelab.playbook",
+          "group": "navigation@1"
+        },
+        {
+          "command": "homelab.openEnv",
+          "when": "view == homelabExplorer && viewItem == homelab.env",
+          "group": "inline"
+        },
+        {
+          "command": "homelab.editVault",
+          "when": "view == homelabExplorer && viewItem == homelab.vault",
+          "group": "inline"
+        },
+        {
+          "command": "homelab.createVault",
+          "when": "view == homelabExplorer && viewItem == homelab.vaultMissing",
+          "group": "inline"
+        },
+        {
+          "command": "homelab.runPlaybook",
+          "when": "view == homelabExplorer && viewItem == homelab.environment",
+          "group": "inline"
+        },
+        {
+          "command": "homelab.createService",
+          "when": "view == homelabExplorer && viewItem == homelab.folder",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "homelab.openPlaybook",
+          "when": "false"
+        },
+        {
+          "command": "homelab.openEnv",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Homelab",
+      "properties": {
+        "homelab.playbooksDir": {
+          "type": "string",
+          "default": "playbooks",
+          "description": "Directory holding the playbook folders, relative to the workspace folder."
+        },
+        "homelab.inventoriesDir": {
+          "type": "string",
+          "default": "inventories",
+          "description": "Directory holding one subdirectory per environment, relative to the workspace folder."
+        },
+        "homelab.inventoryFile": {
+          "type": "string",
+          "default": "hosts.ini",
+          "description": "Inventory filename. A directory under inventoriesDir counts as an environment when it contains this file."
+        },
+        "homelab.groupVarsDir": {
+          "type": "string",
+          "default": "group_vars",
+          "description": "Group variables directory inside each environment."
+        },
+        "homelab.envFileName": {
+          "type": "string",
+          "default": "env.yml",
+          "description": "Unencrypted variables filename inside each group_vars group. Shown as the service's Env row, which opens it in the editor."
+        },
+        "homelab.vaultFileName": {
+          "type": "string",
+          "default": "vault.yml",
+          "description": "Vault filename inside each group_vars group."
+        },
+        "homelab.vaultPasswordFilePattern": {
+          "type": "string",
+          "default": "${userHome}/.ansible-vault/${env}.pass",
+          "scope": "machine",
+          "markdownDescription": "Where to look for an environment's vault password file. Supports `${userHome}`, `${workspaceFolder}` and `${env}`. When the resolved file does not exist, `--ask-vault-password` is used instead. Set to an empty string to always be prompted.\n\nUser-level setting only: ansible executes a password file that is marked executable, so a workspace must not be able to point this somewhere else."
+        },
+        "homelab.vaultPasswordFiles": {
+          "type": "object",
+          "default": {},
+          "scope": "machine",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "Per-environment vault password files, overriding `#homelab.vaultPasswordFilePattern#`. Example: `{ \"production\": \"${userHome}/.ansible-vault/prod.pass\" }`.\n\nUser-level setting only, for the same reason as the pattern."
+        },
+        "homelab.productionPattern": {
+          "type": "string",
+          "default": "production",
+          "description": "Case-insensitive regular expression. Matching environment and task names are drawn in red and, unless confirmProduction is off, ask before running. Set to an empty string to disable."
+        },
+        "homelab.confirmProduction": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask for confirmation before running a playbook against an environment matching productionPattern."
+        },
+        "homelab.ansiblePlaybookCommand": {
+          "type": "string",
+          "default": "ansible-playbook",
+          "scope": "machine",
+          "markdownDescription": "Executable used to run playbooks. Point this at a virtualenv if ansible is not on PATH; it is passed to the shell, so a wrapper such as `uv run ansible-playbook` works too.\n\nUser-level setting only: this is what gets executed, so a workspace must not be able to change it."
+        },
+        "homelab.ansibleVaultCommand": {
+          "type": "string",
+          "default": "ansible-vault",
+          "scope": "machine",
+          "markdownDescription": "Executable used for vault create and edit.\n\nUser-level setting only, for the same reason as the playbook command."
+        }
+      }
+    }
+  }
+}
