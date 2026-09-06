@@ -14,6 +14,7 @@
 /**
  * @typedef {object} Settings
  * @property {string} playbooksDir
+ * @property {string} rolesDir
  * @property {string} inventoriesDir
  * @property {string} inventoryFile
  * @property {string} groupVarsDir
@@ -31,6 +32,7 @@
 const DEFAULTS = {
   // Repository layout -- everything the shell scripts used to hardcode.
   playbooksDir: "playbooks",
+  rolesDir: "roles",
   inventoriesDir: "inventories",
   inventoryFile: "hosts.ini",
   groupVarsDir: "group_vars",

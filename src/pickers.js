@@ -12,6 +12,7 @@ const vscode = require("vscode");
 const { findEnvironments, findPlaybooks, findVaultGroups } = require("./discovery");
 const { validateServiceName } = require("./scaffold");
 const { productionPattern } = require("./settings");
+const { buildTagChoices, formatTagList, parseTagList } = require("./tags");
 
 /**
  * @returns {Promise<vscode.WorkspaceFolder | undefined>}
@@ -162,17 +163,102 @@ async function pickServiceName(existingNames) {
 }
 
 /**
+ * The free-text way in, and the whole of it when nothing was discovered.
+ *
+ * @param {string[]} current
+ * @returns {Promise<string | undefined>}
+ */
+async function promptForTags(current) {
+  const tags = await vscode.window.showInputBox({
+    title: "Ansible tags",
+    prompt: "Comma-separated, passed to --tags",
+    value: formatTagList(current),
+    ignoreFocusOut: true,
+  });
+  return tags === undefined ? undefined : formatTagList(parseTagList(tags));
+}
+
+/** The item that leaves the checkbox list for the input box. */
+const TYPE_TAGS_BY_HAND = "\u0000other";
+
+/**
+ * The tags of a run, as a checkbox list of what the playbook actually has.
+ *
+ * The list is what src/tags.js read out of the YAML, so it is a good list
+ * rather than a guaranteed one -- a templated tag is not in it, and neither is
+ * anything written in a shape the scanner does not know. Hence the last row:
+ * "Other…" hands over to the input box, seeded with whatever is ticked, so a
+ * tag the scan missed is still one QuickPick away rather than a dead end. When
+ * the scan found nothing at all the input box is all there is, which is exactly
+ * what this asked before there was a list.
+ *
+ * @param {import("./tags").PlaybookTag[]} available
+ * @param {string} [previous] the --tags of the last run of this playbook
+ * @returns {Promise<string | undefined>}
+ */
+async function pickTags(available, previous) {
+  const selected = parseTagList(previous);
+  if (!available.length) {
+    return promptForTags(selected);
+  }
+
+  /** @typedef {vscode.QuickPickItem & { tag?: string }} TagItem */
+  /** @type {TagItem[]} */
+  const items = buildTagChoices(available, selected).map((choice) => ({
+    label: choice.name,
+    description: choice.known
+      ? choice.sources.join(", ")
+      : "kept from the last run — not found in this playbook",
+    picked: choice.picked,
+    tag: choice.name,
+  }));
+  items.push(
+    { label: "", kind: vscode.QuickPickItemKind.Separator },
+    {
+      label: "$(edit) Other…",
+      description: "type the tags by hand",
+      picked: false,
+      tag: TYPE_TAGS_BY_HAND,
+    },
+  );
+
+  const chosen = await vscode.window.showQuickPick(items, {
+    title: "Ansible tags",
+    placeHolder: "Tick the tags to pass to --tags",
+    canPickMany: true,
+  });
+  if (!chosen) {
+    return undefined;
+  }
+
+  const tags = chosen
+    .map((item) => item.tag)
+    .filter(
+      /** @returns {tag is string} */
+      (tag) => typeof tag === "string" && tag !== TYPE_TAGS_BY_HAND,
+    );
+  return chosen.some((item) => item.tag === TYPE_TAGS_BY_HAND)
+    ? promptForTags(tags)
+    : formatTagList(tags);
+}
+
+/**
  * Tags / verbosity / --check / --diff / --limit, in one multi-select followed
  * by the inputs for whatever was ticked.
  *
  * @param {import("./command").RunOptions} [previous]
+ * @param {import("./tags").PlaybookTag[]} [availableTags] as read from the playbook
  * @returns {Promise<import("./command").RunOptions | undefined>}
  */
-async function pickRunOptions(previous = {}) {
+async function pickRunOptions(previous = {}, availableTags = []) {
   const items = [
     {
       label: "$(tag) Tags",
-      detail: previous.tags ? `currently: ${previous.tags}` : "--tags",
+      detail: previous.tags
+        ? `currently: ${previous.tags}`
+        : availableTags.length
+          ? `--tags · ${availableTags.length} found in this playbook`
+          : "--tags",
       key: "tags",
       picked: Boolean(previous.tags),
     },
@@ -210,16 +296,11 @@ async function pickRunOptions(previous = {}) {
   const options = { check: keys.has("check"), diff: keys.has("diff") };
 
   if (keys.has("tags")) {
-    const tags = await vscode.window.showInputBox({
-      title: "Ansible tags",
-      prompt: "Comma-separated, passed to --tags",
-      value: previous.tags || "",
-      ignoreFocusOut: true,
-    });
+    const tags = await pickTags(availableTags, previous.tags);
     if (tags === undefined) {
       return undefined;
     }
-    options.tags = tags.trim();
+    options.tags = tags;
   }
 
   if (keys.has("limit")) {
@@ -321,5 +402,6 @@ module.exports = {
   pickPlaybook,
   pickRunOptions,
   pickServiceName,
+  pickTags,
   pickVaultGroup,
 };

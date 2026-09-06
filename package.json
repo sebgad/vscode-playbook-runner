@@ -230,6 +230,11 @@
           "default": "playbooks",
           "description": "Directory holding the playbook folders, relative to the workspace folder."
         },
+        "homelab.rolesDir": {
+          "type": "string",
+          "default": "roles",
+          "description": "Directory holding the roles, relative to the workspace folder — ansible.cfg's roles_path. Read when collecting the tags a playbook offers."
+        },
         "homelab.inventoriesDir": {
           "type": "string",
           "default": "inventories",

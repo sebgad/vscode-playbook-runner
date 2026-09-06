@@ -2,6 +2,28 @@
 
 ## 0.4.0
 
+* The *Tags* option under `⚙` is now a checkbox list of the tags that playbook
+  actually has, instead of an empty box to type a comma-separated string into.
+  They are read out of the YAML — the playbook, everything it
+  `import_playbook`s, and the task files of the roles it reaches through
+  `roles:`, `import_role` or `include_role` — and listed in the order the run
+  reaches them, a play's own tags above the ones inside the roles it imports,
+  each of the latter labelled with the role it came from.
+* Not `ansible-playbook --list-tags`, which is the authoritative answer but
+  needs the inventory, the vault passphrase and a second or two of ansible
+  start-up: three reasons for the list not to be there the moment the item is
+  ticked. `src/tags.js` is therefore a line scanner rather than a YAML parser —
+  the extension still has no runtime dependencies — which skips a tag built out
+  of a variable and could miss an unusual layout. So the list ends in *Other…*,
+  which hands over to the free-text box seeded with whatever is ticked, and a
+  playbook with no tags found goes straight to that box, exactly as before.
+* A tag that was ticked last time and is no longer in the playbook stays in the
+  list, ticked and marked, rather than dropping out of the next run unnoticed.
+* New setting `homelab.rolesDir` (default `roles`) — `ansible.cfg`'s
+  `roles_path`, which is what the tag scan follows role references into. The
+  roles directory was the last piece of this repository's layout the extension
+  did not have a setting for.
+
 * *Homelab: Rekey Vaults…* (`homelab.rekeyVaults`, and the context menu of an
   environment row) rotates the passphrase of every vault in one environment
   through a single `ansible-vault rekey`. One environment per invocation: the

@@ -41,7 +41,8 @@ Homelab (activity bar)
   service can look different under `production` and `staging`.
 * **Click a playbook** to open the file in the editor. `▶` on the row runs it
   against that environment, `⚙` asks for tags, verbosity, `--limit`, `--check`
-  and `--diff` first.
+  and `--diff` first. Tags are a checkbox list of the tags that playbook
+  actually has — see [Where the tag list comes from](#where-the-tag-list-comes-from).
 * **Click Env** to open the plain, unencrypted `env.yml` in the editor.
 * **Click Vault** to `ansible-vault edit` it; without a `vault.yml` the row
   reads `create` and runs `ansible-vault create` instead.
@@ -53,6 +54,29 @@ Homelab (activity bar)
 * The command palette offers the same thing without the tree: *Homelab: Run
   Playbook* walks environment → service → playbook as QuickPicks, which is the
   flow the old `run-ansible-playbooks.sh` had with `read -p`.
+
+## Where the tag list comes from
+
+Ticking *Tags* under `⚙` shows the tags of that playbook to check off, rather
+than an empty box to type into. They are read out of the YAML: the playbook,
+every playbook it `import_playbook`s, and the task files of the roles it pulls
+in through `roles:`, `import_role` or `include_role` — `roles/` by default,
+`homelab.rolesDir` otherwise, which is `ansible.cfg`'s `roles_path`.
+
+They are listed in the order the run reaches them, with a play's own tags above
+the ones that live inside the roles it imports, and each of the latter labelled
+with the role it came from. A tag that was ticked last time and is not in the
+playbook any more stays in the list, ticked and marked, rather than quietly
+disappearing from the next run.
+
+This is deliberately *not* `ansible-playbook --list-tags`, which is the
+authoritative answer but needs the inventory, the vault passphrase and a second
+or two of ansible start-up — three reasons for the list not to be there when the
+item is ticked. The cost is that `src/tags.js` is a line scanner and not a YAML
+parser: a tag built out of a variable is skipped, and an unusual enough layout
+would be missed. So the list ends in *Other…*, which hands over to the free-text
+box seeded with whatever is ticked, and a playbook with no tags found goes
+straight there.
 
 ## Rotating vault passphrases
 
@@ -193,6 +217,7 @@ afterwards. For VS Code Insiders or the Flatpak build, use
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `homelab.playbooksDir` | `playbooks` | Where the playbook folders live. |
+| `homelab.rolesDir` | `roles` | `ansible.cfg`'s `roles_path`; read when collecting the tags a playbook offers. |
 | `homelab.inventoriesDir` | `inventories` | One subdirectory per environment. |
 | `homelab.inventoryFile` | `hosts.ini` | A directory counts as an environment when it contains this. |
 | `homelab.groupVarsDir` | `group_vars` | Group variables directory inside an environment. |
@@ -220,13 +245,15 @@ src/discovery.js    filesystem scanning        ⟵ no `vscode` import, hence tes
 src/command.js      ansible argument vectors   ⟵ likewise
 src/defaults.js     the default of every setting, and their types
 src/paths.js        ${...} expansion, vault password and production rules  ⟵ likewise
+src/tags.js         the tags a playbook offers, read out of the YAML  ⟵ likewise
+src/scaffold.js     the paths a new service is laid out at  ⟵ likewise
 src/settings.js     reading the settings out of vscode
 src/runner.js       task and terminal execution
 src/tree.js         the tree provider and its nodes
 src/pickers.js      the QuickPick chain used by the palette commands
 ```
 
-The four modules marked above import nothing from `vscode`, which is what lets
+The modules marked above import nothing from `vscode`, which is what lets
 `node --test` cover the parts that decide what ends up on an ansible command
 line. The rest is the editor surface.
 

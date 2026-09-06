@@ -15,6 +15,7 @@ const vscode = require("vscode");
 const { sanitizeRunOptions } = require("./src/command");
 const { findEnvironments, findVaultGroups } = require("./src/discovery");
 const { resolveVaultPasswordFile } = require("./src/paths");
+const { findPlaybookTags } = require("./src/tags");
 const runner = require("./src/runner");
 const pickers = require("./src/pickers");
 const scaffold = require("./src/scaffold");
@@ -133,7 +134,11 @@ async function runPlaybookCommand(context, argument, withOptions) {
   if (withOptions) {
     const last = parseLastRun(context.workspaceState.get(LAST_RUN_KEY));
     const previous = last && last.playbookFile === playbookFile ? last.options : {};
-    const picked = await pickers.pickRunOptions(previous);
+    // Read out of the YAML rather than asked of ansible, so the checkbox list
+    // is there without a vault passphrase and without a wait -- see src/tags.js
+    // for what that trades away.
+    const tags = findPlaybookTags(folder.uri.fsPath, playbookFile, settings);
+    const picked = await pickers.pickRunOptions(previous, tags);
     if (!picked) {
       return;
     }

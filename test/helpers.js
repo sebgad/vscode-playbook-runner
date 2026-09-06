@@ -27,22 +27,26 @@ function required(value, what) {
 
 /**
  * Build a throwaway repository from a list of relative paths, and register its
- * removal. A path ending in "/" becomes an empty directory.
+ * removal. A path ending in "/" becomes an empty directory, a plain path an
+ * empty file, and a `[path, content]` pair a file with something in it -- which
+ * only the tag tests need, since they are the only ones that read a file rather
+ * than just noticing it is there.
  *
- * @param {string[]} files
+ * @param {(string | [string, string])[]} files
  * @param {{ prefix?: string }} [opts]
  * @returns {string} the root directory
  */
 function makeFixture(files, opts = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), opts.prefix || "homelab-"));
-  for (const relative of files) {
+  for (const entry of files) {
+    const [relative, content] = Array.isArray(entry) ? entry : [entry, ""];
     const full = path.join(root, relative);
     if (relative.endsWith("/")) {
       fs.mkdirSync(full, { recursive: true });
       continue;
     }
     fs.mkdirSync(path.dirname(full), { recursive: true });
-    fs.writeFileSync(full, "");
+    fs.writeFileSync(full, content);
   }
   return root;
 }

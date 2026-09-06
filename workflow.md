@@ -162,6 +162,7 @@ production silent too, without either name appearing in code.
 | Setting | Default | Replaces |
 | --- | --- | --- |
 | `homelab.playbooksDir` | `playbooks` | `$SCRIPT_DIR/playbooks` |
+| `homelab.rolesDir` | `roles` | — (new; `ansible.cfg`'s `roles_path`, followed by the tag scan, see step 12) |
 | `homelab.inventoriesDir` | `inventories` | `$SCRIPT_DIR/inventories` |
 | `homelab.inventoryFile` | `hosts.ini` | `inventories/$ENV/hosts.ini` |
 | `homelab.groupVarsDir` | `group_vars` | `$VAULTS_DIR` |
@@ -240,6 +241,49 @@ tree without a reload.
     the point — a service present in `production` and missing from `staging` is
     the drift this removes — so the command deliberately takes no environment
     and is not offered on an environment row.
+12. ✅ tags picked from a list instead of typed: `src/tags.js` +
+    `homelab.rolesDir`, the sixth module that never imports `vscode`.
+
+    The alternative was `ansible-playbook --list-tags`, which is the
+    authoritative answer — it is ansible's own view of the same question, and
+    it sees a templated tag we cannot. It was **not** taken: it needs the
+    inventory, needs the vault passphrase (every `group_vars/*/vault.yml` here
+    is encrypted, so it fails outright without one), needs ansible on `PATH`,
+    and costs a second or two of start-up. Each of those is a way for the
+    checkbox list not to appear at the moment the item is ticked, and a picker
+    that sometimes cannot open is worse than a list that is very good.
+
+    So the files are read instead: the playbook, its `import_playbook` chain,
+    and the task files of the roles it reaches, following `roles:`,
+    `- role:`, `import_role`/`include_role` (with `tasks_from`) and
+    `import_tasks`/`include_tasks`. Roles resolve beside the playbook first and
+    then against `homelab.rolesDir`, mirroring how ansible looks and what
+    `ansible.cfg`'s relative `roles_path` means from the cwd every run uses.
+
+    **The accepted cost:** it is a line scanner, not a YAML parser. The
+    extension has no runtime dependencies and gaining a YAML library for a
+    picker would be a poor trade, so the shapes it knows are the shapes this
+    repository writes. A tag built out of a variable is skipped deliberately —
+    showing `{{ thing }}` as something to tick would be a lie — and an unusual
+    enough layout would simply be missed. Two things keep that from being a
+    dead end: the list ends in *Other…*, which opens the old free-text box
+    seeded with whatever is ticked, and a playbook where nothing was found goes
+    straight to that box, which is exactly what this asked before.
+
+    Ordering is part of the design, not an accident. A file's own tags are
+    recorded before anything it pulls in — the descent is deferred until the
+    file has been read, because a role reference sits *above* the `tags:` of
+    the task carrying it, and descending in place buried `deploy-app` under
+    `podman/deploy-app`'s innards. What comes out reads like the run does:
+    `podman-user-setup, create-zfs-datasets, create-nfs-mounts, deploy-app,
+    nginx-reverse-proxy` first, the role's own tags below, each labelled with
+    the role it came from.
+
+    A tag that was ticked last time and is no longer found stays in the list,
+    ticked and marked. Dropping it silently would change what the next run does
+    without saying so, and the remembered options already come back through
+    `sanitizeRunOptions` — the list is the last place a tag can still be seen
+    before it reaches a command line.
 
 ## 10. Verification
 
@@ -252,6 +296,13 @@ Automated (`npm test`, node --test):
   vars-only, a vault without an env, per-environment differences).
 - `test/command.test.js` — argument vectors against what the shell scripts
   produced, verbosity mapping, `--ask-vault-password` fallback, shell quoting.
+- `test/tags.test.js` — the tags of a playbook and of every role it reaches,
+  the three spellings of `tags:` (flow sequence, comma-separated scalar, block
+  sequence, including one flush against its key), bare and `- role:` entries in
+  a `roles:` block, `tasks_from`, `include_tasks`, an `import_playbook` chain
+  and the file each tag is attributed to, a templated tag being skipped, a role
+  nothing references staying out, a configured `rolesDir`, and the carried-over
+  tag the scan no longer finds.
 - `test/scaffold.test.js` — name validation (separators, leading dot, spaces),
   the planned entries and their order, a half-existing service, a custom
   layout, no environments at all, and that carrying out a plan neither
@@ -269,6 +320,11 @@ Still to do by hand (needs a running editor, and hosts):
   `create` on a `＋` row writes a new vault; adding a `.yml` refreshes the tree.
 - Dry run without touching hosts: `⚙ → Check` on
   `playbooks/monitoring/setup-telegraf.yml`.
+- `⚙ → Tags` on `playbooks/authentik/authentik.yml` against `staging`: the
+  checkbox list opens with the tags above, role tags labelled; ticking two and
+  confirming puts exactly those on `--tags`; *Other…* opens the input box
+  seeded with them. `⚙ → Tags` on `playbooks/nfs_servers/setup-network.yml`,
+  which has no tags at all, goes straight to the input box.
 - *Create Service Skeleton…* on a throwaway name: the path list matches what
   appears on disk, the service shows up under both environments with an *Env*
   and a ＋ *Vault* row, and a second run reports nothing to create.
@@ -284,3 +340,8 @@ Still to do by hand (needs a running editor, and hosts):
   VS Code's own *Run Task* — and drift there will not show up in the sidebar.
 - The extension shells out to `ansible-playbook` on `PATH`; no virtualenv
   detection. `homelab.ansiblePlaybookCommand` is the escape hatch.
+- The tag list is read by a line scanner, so it is a very good list rather than
+  a guaranteed one — see step 12 for why `--list-tags` was not used and what
+  *Other…* is there for. If a playbook ever stops being written the way this
+  repository writes them, the symptom is a tag missing from the checkbox list,
+  not a wrong command line.
