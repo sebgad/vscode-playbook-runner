@@ -5,11 +5,16 @@
  *     <service>            playbooks/<name> joined with group_vars/<name>
  *       Playbooks
  *         <playbook.yml>   opens the file; the inline buttons run it
+ *           <tag>          one row per tag the playbook offers
  *       Env                opens group_vars/<name>/env.yml
  *       Vault              edits it, or creates it when there is none yet
  *
  * A service has at most one env and one vault, so those two are rows that act
  * on click rather than sections to expand.
+ *
+ * The tags under a playbook are read out of the YAML by src/tags.js -- the same
+ * list the run options offer as checkboxes, here to be read without opening a
+ * picker and to run one tag on its own.
  */
 
 "use strict";
@@ -19,6 +24,7 @@ const vscode = require("vscode");
 
 const { playbookLabel } = require("./command");
 const { findEnvironments, findServices } = require("./discovery");
+const { findPlaybookTags } = require("./tags");
 const { productionPattern, readSettings } = require("./settings");
 
 const PRODUCTION_COLOR = new vscode.ThemeColor("charts.red");
@@ -131,12 +137,22 @@ class PlaybookNode extends vscode.TreeItem {
   /**
    * @param {{ name: string, file: string }} playbook
    * @param {ServiceNode} parent
+   * @param {import("./tags").PlaybookTag[]} [tags] as read out of the YAML
    */
-  constructor(playbook, parent) {
-    super(playbook.name, vscode.TreeItemCollapsibleState.None);
+  constructor(playbook, parent, tags = []) {
+    // A playbook whose tags were not found stays a leaf: an arrow that opens
+    // onto nothing is worse than no arrow.
+    super(
+      playbook.name,
+      tags.length
+        ? vscode.TreeItemCollapsibleState.Collapsed
+        : vscode.TreeItemCollapsibleState.None,
+    );
     this.playbookFile = playbook.file;
+    this.tags = tags;
     this.environment = parent.environment;
     this.folder = parent.folder;
+    this.settings = parent.settings;
     this.isProduction = parent.isProduction;
     this.contextValue = "homelab.playbook";
     this.resourceUri = vscode.Uri.file(playbook.file);
@@ -151,6 +167,11 @@ class PlaybookNode extends vscode.TreeItem {
       tooltip.appendMarkdown("$(warning) **Production**\n\n");
     }
     tooltip.appendMarkdown("$(go-to-file) Open in the editor — $(play) runs it\n\n");
+    if (tags.length) {
+      tooltip.appendMarkdown(
+        `$(tag) ${tags.length} tag${tags.length === 1 ? "" : "s"} — expand to run one on its own\n\n`,
+      );
+    }
     tooltip.appendCodeblock(
       `ansible-playbook -i ${path.relative(
         parent.folder.uri.fsPath,
@@ -164,6 +185,63 @@ class PlaybookNode extends vscode.TreeItem {
     // Opening, not running: a click is how a file is read everywhere else in
     // the editor, and running lives one deliberate move away on the inline
     // buttons -- which is also what keeps a stray click off production.
+    this.command = {
+      command: "homelab.openPlaybook",
+      title: "Open Playbook",
+      arguments: [this],
+    };
+  }
+}
+
+class TagNode extends vscode.TreeItem {
+  /**
+   * One `--tags` value of the playbook above it. The inline $(play) runs the
+   * playbook with this tag and nothing else; a click opens the playbook, the
+   * same as the row it hangs under -- running stays on the button, which is
+   * what keeps a stray click off production.
+   *
+   * @param {import("./tags").PlaybookTag} tag
+   * @param {PlaybookNode} parent
+   */
+  constructor(tag, parent) {
+    super(tag.name, vscode.TreeItemCollapsibleState.None);
+    this.tag = tag.name;
+    this.playbookFile = parent.playbookFile;
+    this.environment = parent.environment;
+    this.folder = parent.folder;
+    this.settings = parent.settings;
+    this.isProduction = parent.isProduction;
+    this.contextValue = "homelab.tag";
+    this.iconPath = new vscode.ThemeIcon(
+      "tag",
+      parent.isProduction ? PRODUCTION_COLOR : NEUTRAL_COLOR,
+    );
+    // Where it was found: the roles it came through, and nothing at all when
+    // the playbook writes it itself.
+    this.description = tag.sources.join(", ");
+
+    const root = parent.folder.uri.fsPath;
+    const tooltip = new vscode.MarkdownString(undefined, true);
+    if (parent.isProduction) {
+      tooltip.appendMarkdown("$(warning) **Production**\n\n");
+    }
+    tooltip.appendMarkdown("$(play) Runs the playbook with only this tag\n\n");
+    tooltip.appendCodeblock(
+      `ansible-playbook -i ${path.relative(
+        root,
+        parent.environment.inventory,
+      )} ${path.relative(root, parent.playbookFile)} --tags ${tag.name}`,
+      "shell",
+    );
+    tooltip.appendMarkdown(
+      `\n\n${
+        tag.sources.length
+          ? `From ${tag.sources.join(", ")}`
+          : "Written in the playbook itself"
+      }`,
+    );
+    this.tooltip = tooltip;
+
     this.command = {
       command: "homelab.openPlaybook",
       title: "Open Playbook",
@@ -284,6 +362,9 @@ class HomelabTreeProvider {
     if (element instanceof ServiceNode) {
       return this.serviceChildren(element);
     }
+    if (element instanceof PlaybookNode) {
+      return element.tags.map((tag) => new TagNode(tag, element));
+    }
     if (element instanceof SectionNode) {
       return element.childrenOf();
     }
@@ -346,6 +427,29 @@ class HomelabTreeProvider {
   }
 
   /**
+   * The playbook rows of a service, each carrying the tags it offers.
+   *
+   * The scan happens here rather than when a playbook is expanded, because
+   * whether the row gets an arrow at all depends on the answer. It is about a
+   * millisecond of file reading per playbook, and it runs only once the
+   * Playbooks section is opened.
+   *
+   * @param {ServiceNode} node
+   * @returns {vscode.TreeItem[]}
+   */
+  playbookNodes(node) {
+    const root = node.folder.uri.fsPath;
+    return node.service.playbooks.map(
+      (playbook) =>
+        new PlaybookNode(
+          playbook,
+          node,
+          findPlaybookTags(root, playbook.file, node.settings),
+        ),
+    );
+  }
+
+  /**
    * Playbooks, Env and Vault -- only what the service actually has. A section
    * or row that leads nowhere is left out rather than shown empty.
    *
@@ -363,7 +467,7 @@ class HomelabTreeProvider {
         new SectionNode(
           "Playbooks",
           "book",
-          () => service.playbooks.map((playbook) => new PlaybookNode(playbook, node)),
+          () => this.playbookNodes(node),
           service.playbooks.length,
         ),
       );
@@ -386,5 +490,6 @@ module.exports = {
   HomelabTreeProvider,
   PlaybookNode,
   ServiceNode,
+  TagNode,
   VaultNode,
 };

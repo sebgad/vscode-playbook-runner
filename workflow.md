@@ -285,6 +285,33 @@ tree without a reload.
     `sanitizeRunOptions` — the list is the last place a tag can still be seen
     before it reaches a command line.
 
+13. ✅ the tags are a level of the tree, not only a picker: a playbook row
+    expands into one row per tag, `TagNode` in `src/tree.js`, with
+    `homelab.runPlaybookTag` on its inline ▶.
+
+    Nothing new decides anything here. The rows come from the same
+    `findPlaybookTags` the checkbox list uses, and the tag reaches `--tags`
+    through the same `parseTagList`/`formatTagList` the picker's result does --
+    the tree is a second way to *see* the list, not a second way to build a
+    command line. `runPlaybookCommand` grew one branch for it rather than a
+    command of its own, so a tagged run is confirmed, remembered and re-run
+    exactly like any other; the production modal names the tag, because
+    `--tags deploy-app` and a bare run are very different things to say yes to.
+
+    Two decisions worth keeping:
+
+    * **A click still opens the playbook, and ▶ still runs.** Step 10 moved
+      running off the click for playbook rows; a tag row is the same row one
+      level down and would be the easiest accidental production run in the
+      tree if it ran on click.
+    * **The scan happens when the *Playbooks* section is opened**, not when a
+      playbook is expanded, because whether the row gets an arrow at all
+      depends on the answer -- and an arrow that opens onto nothing is worse
+      than no arrow. That is ~1 ms of file reading per playbook (50 playbooks
+      in 43 ms across this repository), so it is not worth a cache; the tags
+      are then re-read on every refresh, which is what keeps them true after
+      an edit.
+
 ## 10. Verification
 
 Automated (`npm test`, node --test):
@@ -320,6 +347,11 @@ Still to do by hand (needs a running editor, and hosts):
   `create` on a `＋` row writes a new vault; adding a `.yml` refreshes the tree.
 - Dry run without touching hosts: `⚙ → Check` on
   `playbooks/monitoring/setup-telegraf.yml`.
+- Expanding `playbooks/authentik/authentik.yml` in the tree: 13 tag rows,
+  `podman-user-setup` first and the `podman/deploy-app` ones labelled with the
+  role; ▶ on `podman-kube-start` against `staging` runs it with exactly
+  `--tags podman-kube-start`; `playbooks/nfs_servers/setup-network.yml` has no
+  arrow at all.
 - `⚙ → Tags` on `playbooks/authentik/authentik.yml` against `staging`: the
   checkbox list opens with the tags above, role tags labelled; ticking two and
   confirming puts exactly those on `--tags`; *Other…* opens the input box

@@ -98,6 +98,12 @@
         "icon": "$(gear)"
       },
       {
+        "command": "homelab.runPlaybookTag",
+        "title": "Run Playbook with This Tag",
+        "category": "Homelab",
+        "icon": "$(play)"
+      },
+      {
         "command": "homelab.rerunLast",
         "title": "Re-run Last Playbook",
         "category": "Homelab",
@@ -181,6 +187,16 @@
           "group": "navigation@1"
         },
         {
+          "command": "homelab.runPlaybookTag",
+          "when": "view == homelabExplorer && viewItem == homelab.tag",
+          "group": "inline"
+        },
+        {
+          "command": "homelab.openPlaybook",
+          "when": "view == homelabExplorer && viewItem == homelab.tag",
+          "group": "navigation@1"
+        },
+        {
           "command": "homelab.openEnv",
           "when": "view == homelabExplorer && viewItem == homelab.env",
           "group": "inline"
@@ -212,6 +228,10 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "homelab.runPlaybookTag",
+          "when": "false"
+        },
         {
           "command": "homelab.openPlaybook",
           "when": "false"

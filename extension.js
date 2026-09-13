@@ -15,7 +15,7 @@ const vscode = require("vscode");
 const { sanitizeRunOptions } = require("./src/command");
 const { findEnvironments, findVaultGroups } = require("./src/discovery");
 const { resolveVaultPasswordFile } = require("./src/paths");
-const { findPlaybookTags } = require("./src/tags");
+const { findPlaybookTags, formatTagList, parseTagList } = require("./src/tags");
 const runner = require("./src/runner");
 const pickers = require("./src/pickers");
 const scaffold = require("./src/scaffold");
@@ -33,6 +33,7 @@ const LAST_RUN_KEY = "homelab.lastRun";
  * @property {vscode.WorkspaceFolder} [folder]
  * @property {import("./src/discovery").Environment} [environment]
  * @property {string} [playbookFile]
+ * @property {string} [tag]
  * @property {string} [envFile]
  * @property {string} [vaultFile]
  * @property {boolean} [hasVault]
@@ -109,6 +110,13 @@ async function resolveContext(node) {
 }
 
 /**
+ * Run a playbook: from a row, from a tag row, or from the palette.
+ *
+ * `withOptions` is the ⚙ path, which asks. Without it the node may still carry
+ * a single tag -- that is a tag row, which runs the playbook with only that
+ * one. It goes through the same parse the picker's result does, because it
+ * reaches a command line either way.
+ *
  * @param {vscode.ExtensionContext} context
  * @param {unknown} argument
  * @param {boolean} withOptions
@@ -143,9 +151,15 @@ async function runPlaybookCommand(context, argument, withOptions) {
       return;
     }
     options = picked;
+  } else {
+    const tags = formatTagList(parseTagList(node.tag));
+    if (tags) {
+      options.tags = tags;
+    }
   }
 
-  if (!(await pickers.confirmProduction(settings, environment, label))) {
+  const description = options.tags ? `${label} --tags ${options.tags}` : label;
+  if (!(await pickers.confirmProduction(settings, environment, description))) {
     return;
   }
 
@@ -193,7 +207,8 @@ async function rerunLast(context) {
   }
 
   const label = runner.playbookLabel(folder.uri.fsPath, settings, last.playbookFile);
-  if (!(await pickers.confirmProduction(settings, environment, label))) {
+  const description = last.options.tags ? `${label} --tags ${last.options.tags}` : label;
+  if (!(await pickers.confirmProduction(settings, environment, description))) {
     return;
   }
 
@@ -447,6 +462,7 @@ function activate(context) {
     register("homelab.runPlaybookWithOptions", (node) =>
       runPlaybookCommand(context, node, true),
     ),
+    register("homelab.runPlaybookTag", (node) => runPlaybookCommand(context, node, false)),
     register("homelab.rerunLast", () => rerunLast(context)),
     register("homelab.editVault", (node) => vaultCommand(node, "edit")),
     register("homelab.createVault", (node) => vaultCommand(node, "create")),

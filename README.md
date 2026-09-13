@@ -6,9 +6,10 @@ filesystem** — no path and no environment name is written down in the
 extension, so adding `inventories/lab/hosts.ini` or a new folder under
 `playbooks/` shows up without touching any code or config.
 
-The tree is **environment → service → Playbooks / Env / Vault**: a service is
-`playbooks/<name>/` and `group_vars/<name>/` shown as one thing, so everything
-belonging to e.g. `authentik` sits in one place per environment. A service has
+The tree is **environment → service → Playbooks / Env / Vault**, with a
+playbook's tags one level below it. A service is `playbooks/<name>/` and
+`group_vars/<name>/` shown as one thing, so everything belonging to e.g.
+`authentik` sits in one place per environment. A service has
 one `env.yml` and one `vault.yml`, so those are rows that act on click rather
 than folders to open.
 
@@ -18,6 +19,9 @@ Homelab (activity bar)
 │   ├── authentik               1
 │   │   ├── Playbooks           1
 │   │   │   └── ▶ authentik.yml     ← click opens it, ▶ / ⚙ run it
+│   │   │       ├── ⌗ deploy-app                       ← ▶ runs only this tag
+│   │   │       ├── ⌗ nginx-reverse-proxy
+│   │   │       └── ⌗ podman-kube-start  podman/deploy-app  ← where it came from
 │   │   ├── ⌥ Env                    ← opens group_vars/authentik/env.yml
 │   │   └── 🔒 Vault                 ← ansible-vault edit
 │   ├── dns_servers             5 · no vault
@@ -43,6 +47,12 @@ Homelab (activity bar)
   against that environment, `⚙` asks for tags, verbosity, `--limit`, `--check`
   and `--diff` first. Tags are a checkbox list of the tags that playbook
   actually has — see [Where the tag list comes from](#where-the-tag-list-comes-from).
+* **Expand a playbook** for those same tags as rows, in the order the run
+  reaches them, each showing the role it came from. `▶` on a tag row runs the
+  playbook with `--tags <that one>` and nothing else — the everyday
+  "just redeploy the app" run without going through `⚙` first. Clicking a tag
+  opens the playbook, like the row above it. A playbook whose tags were not
+  found has no arrow.
 * **Click Env** to open the plain, unencrypted `env.yml` in the editor.
 * **Click Vault** to `ansible-vault edit` it; without a `vault.yml` the row
   reads `create` and runs `ansible-vault create` instead.
@@ -57,8 +67,9 @@ Homelab (activity bar)
 
 ## Where the tag list comes from
 
-Ticking *Tags* under `⚙` shows the tags of that playbook to check off, rather
-than an empty box to type into. They are read out of the YAML: the playbook,
+The tag rows under a playbook, and the checkbox list *Tags* under `⚙` opens,
+are the same list, so both show the tags that playbook has rather than an empty
+box to type into. They are read out of the YAML: the playbook,
 every playbook it `import_playbook`s, and the task files of the roles it pulls
 in through `roles:`, `import_role` or `include_role` — `roles/` by default,
 `homelab.rolesDir` otherwise, which is `ansible.cfg`'s `roles_path`.
@@ -68,6 +79,10 @@ the ones that live inside the roles it imports, and each of the latter labelled
 with the role it came from. A tag that was ticked last time and is not in the
 playbook any more stays in the list, ticked and marked, rather than quietly
 disappearing from the next run.
+
+The scan costs about a millisecond per playbook and runs when a service's
+*Playbooks* section is opened — the answer decides whether a playbook row gets
+an expand arrow at all, so it cannot wait until the row is expanded.
 
 This is deliberately *not* `ansible-playbook --list-tags`, which is the
 authoritative answer but needs the inventory, the vault passphrase and a second

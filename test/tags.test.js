@@ -273,6 +273,13 @@ describe("parseTagList", () => {
     assert.equal(formatTagList(["deploy-app", "deploy-app", " "]), "deploy-app");
     assert.equal(formatTagList([]), "");
   });
+
+  it("turns the one tag of a tree row into a --tags value", () => {
+    // What a tag row hands the run command, straight from the node.
+    assert.equal(formatTagList(parseTagList("deploy-app")), "deploy-app");
+    assert.equal(formatTagList(parseTagList(" deploy-app , deploy-app ")), "deploy-app");
+    assert.equal(formatTagList(parseTagList(undefined)), "");
+  });
 });
 
 describe("buildTagChoices", () => {

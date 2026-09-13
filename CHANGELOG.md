@@ -2,6 +2,15 @@
 
 ## 0.4.0
 
+* Playbook rows expand into their tags — the same list `⚙ → Tags` offers,
+  visible without opening a picker. Each row shows the role the tag came from,
+  and `▶` on it runs the playbook with `--tags <that one>` and nothing else,
+  which is the everyday single-tag run without three dialogs in front of it.
+  Clicking a tag opens the playbook, like the row above it; a playbook whose
+  tags were not found stays a leaf rather than opening onto nothing.
+* A tagged run is confirmed and remembered like any other: the production
+  modal names the tag it is about to run, and *Re-run Last Playbook* repeats
+  the run with that tag.
 * The *Tags* option under `⚙` is now a checkbox list of the tags that playbook
   actually has, instead of an empty box to type a comma-separated string into.
   They are read out of the YAML — the playbook, everything it
