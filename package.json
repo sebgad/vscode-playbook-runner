@@ -1,6 +1,6 @@
 {
-  "name": "homelab-tasks",
-  "displayName": "Homelab",
+  "name": "ansible-runner",
+  "displayName": "Ansible Runner",
   "description": "Ansible sidebar for the homelab repository: run playbooks and manage vaults, discovered from the filesystem.",
   "version": "0.4.0",
   "publisher": "sebgad",
@@ -52,8 +52,8 @@
       "activitybar": [
         {
           "id": "homelab",
-          "title": "Homelab",
-          "icon": "media/ansible.svg"
+          "title": "Ansible Runner",
+          "icon": "media/runner.svg"
         }
       ]
     },
@@ -88,67 +88,67 @@
       {
         "command": "homelab.runPlaybook",
         "title": "Run Playbook",
-        "category": "Homelab",
+        "category": "Ansible Runner",
         "icon": "$(play)"
       },
       {
         "command": "homelab.runPlaybookWithOptions",
         "title": "Run Playbook with Options…",
-        "category": "Homelab",
+        "category": "Ansible Runner",
         "icon": "$(gear)"
       },
       {
         "command": "homelab.runPlaybookTag",
         "title": "Run Playbook with This Tag",
-        "category": "Homelab",
+        "category": "Ansible Runner",
         "icon": "$(play)"
       },
       {
         "command": "homelab.rerunLast",
         "title": "Re-run Last Playbook",
-        "category": "Homelab",
+        "category": "Ansible Runner",
         "icon": "$(debug-restart)"
       },
       {
         "command": "homelab.editVault",
         "title": "Edit Vault",
-        "category": "Homelab",
+        "category": "Ansible Runner",
         "icon": "$(edit)"
       },
       {
         "command": "homelab.createVault",
         "title": "Create Vault",
-        "category": "Homelab",
+        "category": "Ansible Runner",
         "icon": "$(add)"
       },
       {
         "command": "homelab.rekeyVaults",
         "title": "Rekey Vaults…",
-        "category": "Homelab",
+        "category": "Ansible Runner",
         "icon": "$(key)"
       },
       {
         "command": "homelab.openPlaybook",
         "title": "Open Playbook",
-        "category": "Homelab",
+        "category": "Ansible Runner",
         "icon": "$(go-to-file)"
       },
       {
         "command": "homelab.openEnv",
         "title": "Open Env File",
-        "category": "Homelab",
+        "category": "Ansible Runner",
         "icon": "$(go-to-file)"
       },
       {
         "command": "homelab.createService",
         "title": "Create Service Skeleton…",
-        "category": "Homelab",
+        "category": "Ansible Runner",
         "icon": "$(new-folder)"
       },
       {
         "command": "homelab.refresh",
         "title": "Refresh",
-        "category": "Homelab",
+        "category": "Ansible Runner",
         "icon": "$(refresh)"
       }
     ],
@@ -243,7 +243,7 @@
       ]
     },
     "configuration": {
-      "title": "Homelab",
+      "title": "Ansible Runner",
       "properties": {
         "homelab.playbooksDir": {
           "type": "string",

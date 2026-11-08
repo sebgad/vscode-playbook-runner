@@ -20,7 +20,7 @@ const { buildTagChoices, formatTagList, parseTagList } = require("./tags");
 async function pickFolder() {
   const folders = vscode.workspace.workspaceFolders || [];
   if (!folders.length) {
-    vscode.window.showErrorMessage("Homelab: no folder is open.");
+    vscode.window.showErrorMessage("Ansible Runner: no folder is open.");
     return undefined;
   }
   if (folders.length === 1) {
@@ -41,7 +41,7 @@ async function pickEnvironment(folder, settings) {
   const environments = findEnvironments(folder.uri.fsPath, settings);
   if (!environments.length) {
     vscode.window.showErrorMessage(
-      `Homelab: no environment with a ${settings.inventoryFile} under ${settings.inventoriesDir}/.`,
+      `Ansible Runner: no environment with a ${settings.inventoryFile} under ${settings.inventoriesDir}/.`,
     );
     return undefined;
   }
@@ -72,7 +72,7 @@ async function pickPlaybook(folder, settings) {
   const groups = findPlaybooks(folder.uri.fsPath, settings);
   if (!groups.length) {
     vscode.window.showErrorMessage(
-      `Homelab: no playbooks found under ${settings.playbooksDir}/.`,
+      `Ansible Runner: no playbooks found under ${settings.playbooksDir}/.`,
     );
     return undefined;
   }
@@ -118,8 +118,8 @@ async function pickVaultGroup(environment, settings, action) {
   if (!groups.length) {
     vscode.window.showErrorMessage(
       action === "edit"
-        ? `Homelab: no ${settings.vaultFileName} in ${environment.name}.`
-        : `Homelab: every group in ${environment.name} already has a ${settings.vaultFileName}.`,
+        ? `Ansible Runner: no ${settings.vaultFileName} in ${environment.name}.`
+        : `Ansible Runner: every group in ${environment.name} already has a ${settings.vaultFileName}.`,
     );
     return undefined;
   }

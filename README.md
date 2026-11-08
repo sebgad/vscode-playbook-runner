@@ -1,4 +1,4 @@
-# Homelab
+# Ansible Runner
 
 A VS Code sidebar for running this repository's Ansible playbooks and editing
 its vaults. Environments, playbooks and vaults are **discovered from the
@@ -14,7 +14,7 @@ one `env.yml` and one `vault.yml`, so those are rows that act on click rather
 than folders to open.
 
 ```
-Homelab (activity bar)
+Ansible Runner (activity bar)
 ├── production                       ← red: matches homelab.productionPattern
 │   ├── authentik               1
 │   │   ├── Playbooks           1
@@ -61,7 +61,7 @@ Homelab (activity bar)
   at a time, because the passphrase is per environment.
 * Production rows are red and ask for confirmation before running
   (`homelab.confirmProduction`).
-* The command palette offers the same thing without the tree: *Homelab: Run
+* The command palette offers the same thing without the tree: *Ansible Runner: Run
   Playbook* walks environment → service → playbook as QuickPicks, which is the
   flow the old `run-ansible-playbooks.sh` had with `read -p`.
 
@@ -95,7 +95,7 @@ straight there.
 
 ## Rotating vault passphrases
 
-*Homelab: Rekey Vaults…*, or the same command on an environment's context menu,
+*Ansible Runner: Rekey Vaults…*, or the same command on an environment's context menu,
 hands every `vault.yml` in that environment to one `ansible-vault rekey`. It
 asks once for the current passphrase and twice for the new one; production asks
 to confirm a second time.
@@ -117,7 +117,7 @@ Two things the confirmation says, because both are easy to get wrong:
 
 ## Adding a service
 
-*Homelab: Create Service Skeleton…* (the ＋ folder button in the view title)
+*Ansible Runner: Create Service Skeleton…* (the ＋ folder button in the view title)
 asks for a name and lays out the directories a service consists of:
 
 ```
@@ -210,15 +210,15 @@ Two ways to install it:
 ```bash
 cd scripts/vscode-extension
 npm install          # dev tooling only; the extension itself has no dependencies
-npm run package      # -> dist/homelab-tasks-<version>.vsix
-code --install-extension dist/homelab-tasks-0.4.0.vsix
+npm run package      # -> dist/ansible-runner-<version>.vsix
+code --install-extension dist/ansible-runner-0.4.0.vsix
 ```
 
 **As a symlink**, if you would rather have `git pull` be the update mechanism:
 
 ```bash
 ln -s ~/Programmierprojekte/homelab-infra/scripts/vscode-extension \
-      ~/.vscode/extensions/homelab-tasks-0.4.0
+      ~/.vscode/extensions/ansible-runner-0.4.0
 ```
 
 An existing symlink from an older version keeps working; VS Code reads
@@ -281,7 +281,7 @@ npm run check     # lint + typecheck + tests, the one to run before committing
 npm run lint      # eslint
 npm run typecheck # tsc over the JSDoc types; nothing is emitted
 npm test          # node --test
-npm run package   # dist/homelab-tasks-<version>.vsix
+npm run package   # dist/ansible-runner-<version>.vsix
 ```
 
 Types are JSDoc, checked with `tsc --noEmit` under `strict`; there is no

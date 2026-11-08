@@ -92,7 +92,7 @@ function productionPattern(settings) {
   const { pattern, error } = paths.compileProductionPattern(settings.productionPattern);
   if (error) {
     vscode.window.showWarningMessage(
-      `Homelab: homelab.productionPattern is not a valid regular expression (${error}). No environment will be treated as production.`,
+      `Ansible Runner: homelab.productionPattern is not a valid regular expression (${error}). No environment will be treated as production.`,
     );
   }
   return pattern;

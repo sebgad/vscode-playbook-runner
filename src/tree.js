@@ -1,5 +1,5 @@
 /**
- * The Homelab sidebar tree.
+ * The Ansible Runner sidebar tree.
  *
  *   <environment>          production, staging, …
  *     <service>            playbooks/<name> joined with group_vars/<name>

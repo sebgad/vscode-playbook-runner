@@ -78,7 +78,7 @@ function runPlaybook(folder, settings, request) {
     { type: "homelab", environment: request.environment.name, playbook },
     folder,
     `${request.environment.name}: ${label}`,
-    "Homelab",
+    "Ansible Runner",
     execution,
   );
 

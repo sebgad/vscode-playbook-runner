@@ -1,5 +1,5 @@
 /**
- * Homelab — an Ansible sidebar for this repository.
+ * Ansible Runner — an Ansible sidebar for this repository.
  *
  * Playbooks, environments and vaults are discovered from the filesystem
  * (src/discovery.js), so no path, and in particular no environment name, is
@@ -175,7 +175,7 @@ async function runPlaybookCommand(context, argument, withOptions) {
   try {
     await runner.runPlaybook(folder, settings, { environment, playbookFile, options });
   } catch (err) {
-    vscode.window.showErrorMessage(`Homelab: could not run ${label}: ${messageOf(err)}`);
+    vscode.window.showErrorMessage(`Ansible Runner: could not run ${label}: ${messageOf(err)}`);
   }
 }
 
@@ -183,7 +183,7 @@ async function runPlaybookCommand(context, argument, withOptions) {
 async function rerunLast(context) {
   const last = parseLastRun(context.workspaceState.get(LAST_RUN_KEY));
   if (!last) {
-    vscode.window.showInformationMessage("Homelab: nothing has been run yet.");
+    vscode.window.showInformationMessage("Ansible Runner: nothing has been run yet.");
     return;
   }
 
@@ -191,7 +191,7 @@ async function rerunLast(context) {
     (item) => item.uri.fsPath === last.folderPath,
   );
   if (!folder) {
-    vscode.window.showErrorMessage("Homelab: the folder of the last run is no longer open.");
+    vscode.window.showErrorMessage("Ansible Runner: the folder of the last run is no longer open.");
     return;
   }
 
@@ -201,7 +201,7 @@ async function rerunLast(context) {
   );
   if (!environment) {
     vscode.window.showErrorMessage(
-      `Homelab: environment "${last.environmentName}" no longer exists.`,
+      `Ansible Runner: environment "${last.environmentName}" no longer exists.`,
     );
     return;
   }
@@ -219,7 +219,7 @@ async function rerunLast(context) {
       options: last.options,
     });
   } catch (err) {
-    vscode.window.showErrorMessage(`Homelab: could not run ${label}: ${messageOf(err)}`);
+    vscode.window.showErrorMessage(`Ansible Runner: could not run ${label}: ${messageOf(err)}`);
   }
 }
 
@@ -252,7 +252,7 @@ async function vaultCommand(argument, action) {
     runner.runVaultCommand(folder, settings, { environment, vaultFile, action });
   } catch (err) {
     vscode.window.showErrorMessage(
-      `Homelab: could not ${action} the vault: ${messageOf(err)}`,
+      `Ansible Runner: could not ${action} the vault: ${messageOf(err)}`,
     );
   }
 }
@@ -281,7 +281,7 @@ async function rekeyVaultsCommand(argument) {
     .map((group) => group.vaultFile);
   if (!vaultFiles.length) {
     vscode.window.showErrorMessage(
-      `Homelab: no ${settings.vaultFileName} in ${environment.name} to rekey.`,
+      `Ansible Runner: no ${settings.vaultFileName} in ${environment.name} to rekey.`,
     );
     return;
   }
@@ -303,7 +303,7 @@ async function rekeyVaultsCommand(argument) {
     runner.runVaultRekey(folder, settings, { environment, vaultFiles });
   } catch (err) {
     vscode.window.showErrorMessage(
-      `Homelab: could not rekey the vaults of ${environment.name}: ${messageOf(err)}`,
+      `Ansible Runner: could not rekey the vaults of ${environment.name}: ${messageOf(err)}`,
     );
   }
 }
@@ -321,7 +321,7 @@ async function openFile(argument, key) {
     const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
     await vscode.window.showTextDocument(document);
   } catch (err) {
-    vscode.window.showErrorMessage(`Homelab: could not open ${file}: ${messageOf(err)}`);
+    vscode.window.showErrorMessage(`Ansible Runner: could not open ${file}: ${messageOf(err)}`);
   }
 }
 
@@ -356,14 +356,14 @@ async function createServiceSkeleton(argument, refresh) {
   try {
     plan = scaffold.planService(root, name, settings);
   } catch (err) {
-    vscode.window.showErrorMessage(`Homelab: ${messageOf(err)}`);
+    vscode.window.showErrorMessage(`Ansible Runner: ${messageOf(err)}`);
     return;
   }
 
   const missing = plan.entries.filter((entry) => !entry.exists);
   if (!missing.length) {
     vscode.window.showInformationMessage(
-      `Homelab: ${plan.name} already has every directory; nothing to create.`,
+      `Ansible Runner: ${plan.name} already has every directory; nothing to create.`,
     );
     return;
   }
@@ -387,11 +387,11 @@ async function createServiceSkeleton(argument, refresh) {
     const { created } = scaffold.createSkeleton(plan);
     refresh();
     vscode.window.showInformationMessage(
-      `Homelab: created ${created.length} ${created.length === 1 ? "entry" : "entries"} for ${plan.name}.`,
+      `Ansible Runner: created ${created.length} ${created.length === 1 ? "entry" : "entries"} for ${plan.name}.`,
     );
   } catch (err) {
     vscode.window.showErrorMessage(
-      `Homelab: could not create the skeleton for ${plan.name}: ${messageOf(err)}`,
+      `Ansible Runner: could not create the skeleton for ${plan.name}: ${messageOf(err)}`,
     );
   }
 }

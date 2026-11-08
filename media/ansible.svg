@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
-  <circle cx="12" cy="12" r="9.6" stroke="currentColor" stroke-width="1.7" />
-  <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd"
-        transform="translate(12 12) scale(0.95) translate(-12.15 -11.61)"
-        d="M17.797 17.305 L10.35 11.823 L8.195 17.208 H6.51 L11.197 5.918 L11.85 6.35 L15.75 15.6 Z
-           M10.910 11.460 L14.940 14.638 L12.272 8.049 Z" />
-</svg>

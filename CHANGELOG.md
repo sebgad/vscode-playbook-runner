@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+* Renamed from *Homelab* (`homelab-tasks`) to *Ansible Runner*
+  (`ansible-runner`): the activity bar, the command palette category, the task
+  source and the prefix of every notification. The extension ID is now
+  `sebgad.ansible-runner`, so a `.vsix` install of the old one has to be
+  uninstalled by hand, and the last run and remembered run options — kept per
+  extension ID — start empty once.
+* Setting keys (`homelab.*`, `homelabTasks.*`), command IDs, the view ID and
+  the `homelab` task type are unchanged, so existing settings, keybindings and
+  `tasks.json` entries keep working.
+* New icon: the running figure from [Tabler Icons](https://tabler.io/icons)
+  (MIT), replacing the Ansible logo, which is a Red Hat trademark.
+  `media/icon.svg` is the source of `media/icon.png`.
+
 ## 0.4.0
 
 * Playbook rows expand into their tags — the same list `⚙ → Tags` offers,
