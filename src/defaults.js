@@ -27,6 +27,7 @@
  * @property {string} ansiblePlaybookCommand
  * @property {string} ansibleVaultCommand
  * @property {string[]} serviceEnvironments
+ * @property {string[]} setupTags
  */
 
 /** @type {Settings} */
@@ -53,6 +54,10 @@ const DEFAULTS = {
   // Which environments Create Service Skeleton lays a service out in. Empty
   // means every environment discovered under inventoriesDir.
   serviceEnvironments: [],
+
+  // Tags whose tasks still run before the start of a task range, because the
+  // tasks after it need the facts they set.
+  setupTags: ["podman-user-setup"],
 };
 
 module.exports = DEFAULTS;

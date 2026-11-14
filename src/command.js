@@ -45,6 +45,9 @@ function verbosityFlag(level) {
  * @property {boolean} [diff]
  * @property {number} [verbosity]
  * @property {string[]} [extraArgs]
+ * @property {string} [fromTask]   task range, run by the range strategy plugin
+ * @property {string} [untilTask]  from = until is a single task
+ * @property {boolean} [step]      --step: confirm every task
  */
 
 /**
@@ -77,6 +80,15 @@ function sanitizeRunOptions(value) {
   }
   if (raw.diff === true) {
     options.diff = true;
+  }
+  if (typeof raw.fromTask === "string" && raw.fromTask.trim()) {
+    options.fromTask = raw.fromTask.trim();
+  }
+  if (typeof raw.untilTask === "string" && raw.untilTask.trim()) {
+    options.untilTask = raw.untilTask.trim();
+  }
+  if (raw.step === true) {
+    options.step = true;
   }
   const verbosity = Number(raw.verbosity);
   if (Number.isFinite(verbosity) && verbosity > 0) {
@@ -123,11 +135,119 @@ function buildPlaybookArgs(spec) {
   if (verbose) {
     args.push(verbose);
   }
+  // The task range is deliberately not here: there is no ansible flag for
+  // "until", so it travels as env to the range strategy -- see
+  // buildPlaybookEnv.
+  if (options.step) {
+    args.push("--step");
+  }
   if (Array.isArray(options.extraArgs)) {
     args.push(...options.extraArgs);
   }
 
   return args;
+}
+
+/** The strategy plugin shipped in ansible/strategy/, by its file name. */
+const RANGE_STRATEGY = "playbook_runner_range";
+
+/**
+ * @param {RunOptions} options
+ * @returns {boolean}
+ */
+function hasTaskRange(options) {
+  return Boolean(options.fromTask || options.untilTask);
+}
+
+/**
+ * The environment a task-range run needs on top of the user's own: the range
+ * strategy, where to find it, the two edges, the tags that still run before
+ * the start, and where the plugin reports whether each edge matched. Empty
+ * for every other run, so nothing changes for a run without a range.
+ *
+ * @param {{ options: RunOptions, setupTags: string[], pluginDir: string, statusFile: string }} spec
+ * @returns {Record<string, string>}
+ */
+function buildPlaybookEnv(spec) {
+  const options = spec.options || {};
+  if (!hasTaskRange(options)) {
+    return {};
+  }
+  const setupTags = Array.isArray(spec.setupTags)
+    ? spec.setupTags.filter((tag) => typeof tag === "string")
+    : [];
+  return {
+    ANSIBLE_STRATEGY_PLUGINS: spec.pluginDir,
+    ANSIBLE_STRATEGY: RANGE_STRATEGY,
+    PLAYBOOK_RUNNER_FROM_TASK: options.fromTask || "",
+    PLAYBOOK_RUNNER_UNTIL_TASK: options.untilTask || "",
+    PLAYBOOK_RUNNER_SETUP_TAGS: JSON.stringify(setupTags),
+    PLAYBOOK_RUNNER_STATUS_FILE: spec.statusFile,
+  };
+}
+
+/**
+ * Why a task range cannot run against this outline, or null when it can.
+ *
+ * This is the guard that keeps a range run from quietly becoming a whole run:
+ * an edge the plugin would never match -- a renamed task in a remembered last
+ * run, an until before the from -- is refused before anything starts. So is a
+ * playbook that sets `strategy:` itself, because a play keyword beats
+ * ANSIBLE_STRATEGY and the plugin would never be loaded.
+ *
+ * @param {import("./tags").PlaybookOutline} outline
+ * @param {RunOptions} options
+ * @returns {string | null}
+ */
+function validateTaskRange(outline, options) {
+  if (!hasTaskRange(options)) {
+    return null;
+  }
+  if (outline.strategy) {
+    return `this playbook sets "strategy: ${outline.strategy}", which would bypass the task-range plugin`;
+  }
+  const names = outline.plays.flatMap((play) => play.tasks.map((task) => task.name));
+  let start = 0;
+  if (options.fromTask) {
+    start = names.indexOf(options.fromTask);
+    if (start < 0) {
+      return `task "${options.fromTask}" was not found in this playbook`;
+    }
+  }
+  if (options.untilTask) {
+    if (!names.includes(options.untilTask)) {
+      return `task "${options.untilTask}" was not found in this playbook`;
+    }
+    if (names.indexOf(options.untilTask, start) < 0) {
+      return `"${options.untilTask}" comes before "${options.fromTask}", so the range is empty`;
+    }
+  }
+  return null;
+}
+
+/**
+ * How a run is named in the production confirmation and in messages.
+ *
+ * @param {string} label
+ * @param {RunOptions} options
+ * @returns {string}
+ */
+function describeRun(label, options) {
+  const parts = [label];
+  if (options.tags) {
+    parts.push(`--tags ${options.tags}`);
+  }
+  if (options.fromTask && options.fromTask === options.untilTask) {
+    parts.push(`only «${options.fromTask}»`);
+  } else {
+    if (options.fromTask) {
+      parts.push(`from «${options.fromTask}»`);
+    }
+    if (options.untilTask) {
+      parts.push(`until «${options.untilTask}»`);
+    }
+  }
+  return parts.join(" ");
 }
 
 /**
@@ -195,12 +315,17 @@ function playbookLabel(root, settings, playbookFile) {
 
 module.exports = {
   MAX_VERBOSITY,
+  RANGE_STRATEGY,
   buildPlaybookArgs,
+  buildPlaybookEnv,
   buildVaultArgv,
   buildVaultRekeyArgv,
+  describeRun,
+  hasTaskRange,
   playbookLabel,
   sanitizeRunOptions,
   shellQuote,
+  validateTaskRange,
   vaultArgs,
   verbosityFlag,
 };

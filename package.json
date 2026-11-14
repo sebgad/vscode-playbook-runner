@@ -79,6 +79,10 @@
           "playbook": {
             "type": "string",
             "description": "Playbook path, relative to the workspace folder."
+          },
+          "runId": {
+            "type": "string",
+            "description": "Identifies one run, so its result can be recorded in the run history."
           }
         }
       }
@@ -324,6 +328,17 @@
             "type": "string"
           },
           "markdownDescription": "Environments that *Create Service Skeleton…* creates `group_vars/<name>/` in, by directory name under `#playbookRunner.inventoriesDir#`. Empty means every environment. A listed name that is not an environment (no `#playbookRunner.inventoryFile#`) is skipped and named in the confirmation — the command never creates an inventory."
+        },
+        "playbookRunner.setupTags": {
+          "type": "array",
+          "default": [
+            "podman-user-setup"
+          ],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Tags whose tasks still run before the start of a task range (*From task* / *Only this task*), because the tasks after it need the facts they set. Empty makes *From task* behave exactly like `--start-at-task`."
         }
       }
     }

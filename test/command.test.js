@@ -10,12 +10,17 @@ const path = require("node:path");
 const { describe, it } = require("node:test");
 
 const {
+  RANGE_STRATEGY,
   buildPlaybookArgs,
+  buildPlaybookEnv,
   buildVaultArgv,
   buildVaultRekeyArgv,
+  describeRun,
+  hasTaskRange,
   playbookLabel,
   sanitizeRunOptions,
   shellQuote,
+  validateTaskRange,
   vaultArgs,
   verbosityFlag,
 } = require("../src/command");
@@ -284,5 +289,143 @@ describe("playbookLabel", () => {
       playbookLabel("/repo", settings, path.join("/repo", "playbook.yml")),
       "playbook.yml",
     );
+  });
+});
+
+describe("task-range run options", () => {
+  it("sanitizeRunOptions keeps task range and step", () => {
+    assert.deepEqual(sanitizeRunOptions({ fromTask: "  A ", untilTask: "B", step: true }), {
+      fromTask: "A",
+      untilTask: "B",
+      step: true,
+    });
+    assert.deepEqual(sanitizeRunOptions({ fromTask: 3, untilTask: {}, step: "yes" }), {});
+    assert.deepEqual(sanitizeRunOptions({ fromTask: "   " }), {});
+  });
+
+  it("buildPlaybookArgs adds --step before extraArgs and never carries the range", () => {
+    const args = buildPlaybookArgs({
+      inventory: "i.ini",
+      playbook: "p.yml",
+      vaultPasswordFile: "/v",
+      options: { step: true, fromTask: "A", untilTask: "A", extraArgs: ["-e", "x=1"] },
+    });
+    assert.deepEqual(args.slice(-3), ["--step", "-e", "x=1"]);
+    assert.ok(!args.includes("A"));
+    assert.ok(!args.includes("--start-at-task"));
+  });
+
+  it("hasTaskRange is true for either edge only", () => {
+    assert.equal(hasTaskRange({}), false);
+    assert.equal(hasTaskRange({ tags: "x", step: true }), false);
+    assert.equal(hasTaskRange({ fromTask: "A" }), true);
+    assert.equal(hasTaskRange({ untilTask: "B" }), true);
+  });
+});
+
+describe("buildPlaybookEnv", () => {
+  const base = {
+    setupTags: ["podman-user-setup"],
+    pluginDir: "/ext/ansible/strategy",
+    statusFile: "/s/run.json",
+  };
+
+  it("is empty without a range", () => {
+    assert.deepEqual(buildPlaybookEnv({ ...base, options: { tags: "x", step: true } }), {});
+  });
+
+  it("enables the strategy for a from-only range", () => {
+    assert.deepEqual(buildPlaybookEnv({ ...base, options: { fromTask: "A" } }), {
+      ANSIBLE_STRATEGY_PLUGINS: "/ext/ansible/strategy",
+      ANSIBLE_STRATEGY: "playbook_runner_range",
+      PLAYBOOK_RUNNER_FROM_TASK: "A",
+      PLAYBOOK_RUNNER_UNTIL_TASK: "",
+      PLAYBOOK_RUNNER_SETUP_TAGS: '["podman-user-setup"]',
+      PLAYBOOK_RUNNER_STATUS_FILE: "/s/run.json",
+    });
+    assert.equal(RANGE_STRATEGY, "playbook_runner_range");
+  });
+
+  it("leaves FROM_TASK empty for an until-only range", () => {
+    const env = buildPlaybookEnv({ ...base, options: { untilTask: "B" } });
+    assert.equal(env.PLAYBOOK_RUNNER_FROM_TASK, "");
+    assert.equal(env.PLAYBOOK_RUNNER_UNTIL_TASK, "B");
+  });
+
+  it("carries both edges for a single task", () => {
+    const env = buildPlaybookEnv({ ...base, options: { fromTask: "it's [x]", untilTask: "it's [x]" } });
+    assert.equal(env.PLAYBOOK_RUNNER_FROM_TASK, "it's [x]");
+    assert.equal(env.PLAYBOOK_RUNNER_UNTIL_TASK, "it's [x]");
+  });
+
+  it("keeps only string setup tags", () => {
+    const setupTags = /** @type {string[]} */ (/** @type {unknown} */ ([1, "x", null]));
+    const env = buildPlaybookEnv({ ...base, setupTags, options: { fromTask: "A" } });
+    assert.equal(env.PLAYBOOK_RUNNER_SETUP_TAGS, '["x"]');
+  });
+});
+
+describe("validateTaskRange", () => {
+  /**
+   * @param {string[]} names
+   * @param {string | null} [strategy]
+   * @returns {import("../src/tags").PlaybookOutline}
+   */
+  const outlineOf = (names, strategy = null) => ({
+    plays: [
+      {
+        name: "play",
+        hosts: "all",
+        tasks: names.map((name, index) => ({
+          name,
+          bareName: name,
+          role: null,
+          tags: [],
+          file: "/p.yml",
+          line: index + 1,
+        })),
+      },
+    ],
+    strategy,
+    skipped: 0,
+  });
+  const outline = outlineOf(["a", "r : b", "c"]);
+
+  it("accepts no range and a known edge", () => {
+    assert.equal(validateTaskRange(outline, {}), null);
+    assert.equal(validateTaskRange(outline, { fromTask: "r : b" }), null);
+    assert.equal(validateTaskRange(outline, { fromTask: "a", untilTask: "c" }), null);
+    assert.equal(validateTaskRange(outline, { fromTask: "c", untilTask: "c" }), null);
+  });
+
+  it("refuses an unknown task, naming it", () => {
+    const reason = validateTaskRange(outline, { fromTask: "zz" });
+    assert.match(String(reason), /zz/);
+    assert.match(String(reason), /not found/);
+    assert.match(String(validateTaskRange(outline, { untilTask: "yy" })), /yy.*not found/);
+  });
+
+  it("refuses an until that comes before the from", () => {
+    assert.match(String(validateTaskRange(outline, { fromTask: "c", untilTask: "a" })), /before/);
+  });
+
+  it("refuses any range on a playbook that sets strategy", () => {
+    const free = outlineOf(["a"], "free");
+    assert.match(String(validateTaskRange(free, { fromTask: "a" })), /strategy/);
+    assert.equal(validateTaskRange(free, {}), null);
+  });
+
+  it("takes the first occurrence of until at or after from", () => {
+    assert.equal(validateTaskRange(outlineOf(["x", "y", "x"]), { fromTask: "y", untilTask: "x" }), null);
+  });
+});
+
+describe("describeRun", () => {
+  it("names tags and the task range", () => {
+    assert.equal(describeRun("p.yml", {}), "p.yml");
+    assert.equal(describeRun("p.yml", { tags: "t", fromTask: "A", untilTask: "A" }), "p.yml --tags t only «A»");
+    assert.equal(describeRun("p.yml", { fromTask: "A" }), "p.yml from «A»");
+    assert.equal(describeRun("p.yml", { untilTask: "B" }), "p.yml until «B»");
+    assert.equal(describeRun("p.yml", { fromTask: "A", untilTask: "B" }), "p.yml from «A» until «B»");
   });
 });
