@@ -111,7 +111,8 @@ function buildDashboardModel(folders, readSettingsFor, history) {
  *   | { type: "rerunLast" }
  *   | { type: "openSettings" }
  *   | { type: "setSetting", key: string, value: unknown, target: "workspace" | "user" }
- *   | { type: "resetSetting", key: string, target: "workspace" | "user" }} WebviewMessage
+ *   | { type: "resetSetting", key: string, target: "workspace" | "user" }
+ *   | { type: "moveSetting", key: string }} WebviewMessage
  */
 
 /**
@@ -145,6 +146,8 @@ function parseWebviewMessage(value) {
       return { type: "rerunLast" };
     case "openSettings":
       return { type: "openSettings" };
+    case "moveSetting":
+      return typeof raw.key === "string" ? { type: "moveSetting", key: raw.key } : null;
     case "setSetting":
     case "resetSetting": {
       // The value is validated against the setting's type later, in

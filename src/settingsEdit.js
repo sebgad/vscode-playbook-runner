@@ -137,4 +137,42 @@ function settingTarget(key, requested) {
   return MACHINE_SETTINGS.includes(key) ? "user" : requested;
 }
 
-module.exports = { MACHINE_SETTINGS, SETTING_GROUPS, settingTarget, validateSettingValue };
+/**
+ * Move a workspace value to User settings: write it to User first, and remove
+ * it from the workspace only once that write succeeded -- a refused User write
+ * (a settings.json with unsaved edits, say) must not leave the value nowhere.
+ * `update` is WorkspaceConfiguration.update bound to the key, passed in so this
+ * stays testable without `vscode`.
+ *
+ * @param {string} key
+ * @param {unknown} workspaceValue
+ * @param {(value: unknown, target: "workspace" | "user") => Promise<void>} update
+ * @returns {Promise<string | null>} why nothing was moved, or null
+ */
+async function moveSettingToUser(key, workspaceValue, update) {
+  if (MACHINE_SETTINGS.includes(key)) {
+    return `${key} is only ever saved to User settings`;
+  }
+  if (workspaceValue === undefined) {
+    return Object.prototype.hasOwnProperty.call(DEFAULTS, key)
+      ? `${key} has no workspace value to move`
+      : `"${key}" is not a Playbook Runner setting`;
+  }
+  const checked = validateSettingValue(key, workspaceValue);
+  if (!checked.ok) {
+    return checked.error;
+  }
+  try {
+    await update(checked.value, "user");
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  try {
+    await update(undefined, "workspace");
+  } catch (err) {
+    return `saved to User settings, but the workspace value could not be removed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  return null;
+}
+
+module.exports = { MACHINE_SETTINGS, SETTING_GROUPS, moveSettingToUser, settingTarget, validateSettingValue };

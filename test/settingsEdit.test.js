@@ -19,6 +19,7 @@ const DEFAULTS = require("../src/defaults");
 const {
   MACHINE_SETTINGS,
   SETTING_GROUPS,
+  moveSettingToUser,
   settingTarget,
   validateSettingValue,
 } = require("../src/settingsEdit");
@@ -77,5 +78,47 @@ describe("settings edit", () => {
     assert.equal(settingTarget("ansiblePlaybookCommand", "workspace"), "user");
     assert.equal(settingTarget("playbooksDir", "workspace"), "workspace");
     assert.equal(settingTarget("playbooksDir", "user"), "user");
+  });
+});
+
+describe("moveSettingToUser", () => {
+  /** @returns {{ calls: [unknown, string][], update: (value: unknown, target: "workspace" | "user") => Promise<void> }} */
+  const recorder = (failOn = "") => {
+    /** @type {[unknown, string][]} */
+    const calls = [];
+    return {
+      calls,
+      update: async (value, target) => {
+        if (target === failOn) {
+          throw new Error(`cannot write ${target} settings`);
+        }
+        calls.push([value, target]);
+      },
+    };
+  };
+
+  it("saves to User first, then removes the workspace value", async () => {
+    const r = recorder();
+    assert.equal(await moveSettingToUser("setupTags", [" a "], r.update), null);
+    assert.deepEqual(r.calls, [
+      [["a"], "user"],
+      [undefined, "workspace"],
+    ]);
+  });
+
+  it("keeps the workspace value when the User write fails", async () => {
+    const r = recorder("user");
+    const error = await moveSettingToUser("playbooksDir", "plays", r.update);
+    assert.match(String(error), /cannot write user/);
+    assert.deepEqual(r.calls, []);
+  });
+
+  it("writes nothing for a workspace value that would not validate", async () => {
+    const r = recorder();
+    assert.match(String(await moveSettingToUser("productionPattern", "(prod", r.update)), /regular expression/);
+    assert.match(String(await moveSettingToUser("playbooksDir", undefined, r.update)), /no workspace value/);
+    assert.match(String(await moveSettingToUser("ansiblePlaybookCommand", "x", r.update)), /User/);
+    assert.match(String(await moveSettingToUser("nope", "x", r.update)), /not a Playbook Runner setting/);
+    assert.deepEqual(r.calls, []);
   });
 });

@@ -56,8 +56,35 @@
   let settings = [];
   /** @type {Map<string, string>} setting key -> why the last save was refused */
   const settingErrors = new Map();
-  /** @type {Map<string, string>} setting key -> text kept in its field after a refused save */
+  /**
+   * What is typed in a Settings field and not saved yet, by the field's
+   * data-key. The page re-renders whole (a run ends, a file changes), and
+   * without this a half-typed value would snap back to the saved one.
+   *
+   * @type {Map<string, string>}
+   */
   const settingDrafts = new Map();
+
+  /** @param {string} fieldKey @param {string} fallback */
+  function draftOr(fieldKey, fallback) {
+    return settingDrafts.has(fieldKey) ? String(settingDrafts.get(fieldKey)) : fallback;
+  }
+
+  /** @param {string} fieldKey */
+  function keepDraft(fieldKey) {
+    return (/** @type {Event} */ e) => {
+      settingDrafts.set(fieldKey, /** @type {HTMLInputElement} */ (e.target).value);
+    };
+  }
+
+  /** Forget the drafts of one setting's fields once it saved. @param {string} key */
+  function dropDrafts(key) {
+    for (const fieldKey of [...settingDrafts.keys()]) {
+      if (fieldKey.endsWith(`:${key}`)) {
+        settingDrafts.delete(fieldKey);
+      }
+    }
+  }
   /** @type {Record<string, string[]>} */
   let setupTags = {};
   /** @type {Map<string, any>} playbook file -> outline, or "loading" */
@@ -471,14 +498,14 @@
     if (setting.type === "string") {
       const commit = (/** @type {HTMLInputElement} */ input) => {
         if (input.value !== String(setting.value ?? "") || settingErrors.has(key)) {
-          settingDrafts.set(key, input.value);
           saveSetting(setting, input.value);
         }
       };
       return h("input", {
         type: "text",
         class: "setting-text",
-        value: settingDrafts.has(key) ? settingDrafts.get(key) : String(setting.value ?? ""),
+        value: draftOr(`setting:${key}`, String(setting.value ?? "")),
+        oninput: keepDraft(`setting:${key}`),
         placeholder: String(setting.defaultValue ?? ""),
         spellcheck: "false",
         "data-key": `setting:${key}`,
@@ -515,11 +542,14 @@
           placeholder: "add…",
           spellcheck: "false",
           "data-key": `setting-add:${key}`,
+          value: draftOr(`setting-add:${key}`, ""),
+          oninput: keepDraft(`setting-add:${key}`),
           onkeydown: (/** @type {KeyboardEvent} */ e) => {
             const input = /** @type {HTMLInputElement} */ (e.target);
             if (e.key === "Enter" && input.value.trim()) {
+              // Kept as a draft until the save comes back: a refused one
+              // leaves the text where it was typed.
               saveSetting(setting, [...items, input.value]);
-              input.value = "";
             }
           },
         }),
@@ -539,7 +569,14 @@
       }
     };
     nameInput = /** @type {HTMLInputElement} */ (
-      h("input", { type: "text", placeholder: "environment", spellcheck: "false", "data-key": `setting-map-name:${key}` })
+      h("input", {
+        type: "text",
+        placeholder: "environment",
+        spellcheck: "false",
+        "data-key": `setting-map-name:${key}`,
+        value: draftOr(`setting-map-name:${key}`, ""),
+        oninput: keepDraft(`setting-map-name:${key}`),
+      })
     );
     pathInput = /** @type {HTMLInputElement} */ (
       h("input", {
@@ -547,6 +584,8 @@
         placeholder: "password file",
         spellcheck: "false",
         "data-key": `setting-map-path:${key}`,
+        value: draftOr(`setting-map-path:${key}`, ""),
+        oninput: keepDraft(`setting-map-path:${key}`),
         onkeydown: (/** @type {KeyboardEvent} */ e) => e.key === "Enter" && add(),
       })
     );
@@ -641,10 +680,9 @@
               {
                 class: "link",
                 title: "Save this value to your User settings, for every workspace, and remove it from this workspace",
-                onclick: () => {
-                  saveSetting(setting, setting.workspaceValue, "user");
-                  vscode.postMessage({ type: "resetSetting", key: setting.key, target: "workspace" });
-                },
+                // One message: the extension removes the workspace value only
+                // after the User write succeeded.
+                onclick: () => vscode.postMessage({ type: "moveSetting", key: setting.key }),
               },
               icon("account"),
               "Move to User settings",
@@ -1452,14 +1490,16 @@
         settingErrors.set(message.key, message.error);
       } else {
         settingErrors.delete(message.key);
-        settingDrafts.delete(message.key);
+        dropDrafts(message.key);
       }
       render();
     }
   });
 
   // The relative times go stale; a minute is as fine as they get.
-  setInterval(() => model && render(), 60000);
+  // The Settings tab shows no times, and a render there is only a chance to
+  // disturb someone typing.
+  setInterval(() => model && state.tab === "runs" && render(), 60000);
 
   vscode.postMessage({ type: "ready" });
 })();

@@ -218,6 +218,11 @@ describe("dashboard model", () => {
       });
       assert.equal(parseWebviewMessage({ type: "setSetting", key: "a", value: 1, target: "folder" }), null);
       assert.equal(parseWebviewMessage({ type: "resetSetting", key: 3, target: "user" }), null);
+      assert.deepEqual(parseWebviewMessage({ type: "moveSetting", key: "setupTags", extra: 1 }), {
+        type: "moveSetting",
+        key: "setupTags",
+      });
+      assert.equal(parseWebviewMessage({ type: "moveSetting" }), null);
     });
 
     it("resolveVaultRequest resolves a service that has the vault the action needs", () => {

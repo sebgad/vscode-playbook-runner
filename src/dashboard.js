@@ -290,6 +290,26 @@ class DashboardPanel {
       await this.writeSetting(message.key, undefined, message.target);
       return;
     }
+    if (message.type === "moveSetting") {
+      const config = vscode.workspace.getConfiguration(SECTION);
+      const inspected = Object.prototype.hasOwnProperty.call(DEFAULTS, message.key)
+        ? config.inspect(message.key)
+        : undefined;
+      const error = await settingsEdit.moveSettingToUser(
+        message.key,
+        inspected ? inspected.workspaceValue : undefined,
+        (value, target) =>
+          Promise.resolve(
+            config.update(
+              message.key,
+              value,
+              target === "user" ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace,
+            ),
+          ),
+      );
+      void this.panel.webview.postMessage({ type: "settingResult", key: message.key, error });
+      return;
+    }
     if (message.type === "openSettings") {
       await vscode.commands.executeCommand("workbench.action.openSettings", "playbookRunner");
       return;
