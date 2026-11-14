@@ -1,5 +1,5 @@
 /**
- * Playbook Runner — an Ansible sidebar for this repository.
+ * Playbook Runner — an Ansible dashboard for this repository.
  *
  * Playbooks, environments and vaults are discovered from the filesystem
  * (src/discovery.js), so no path, and in particular no environment name, is
@@ -127,11 +127,10 @@ async function resolveContext(node) {
 }
 
 /**
- * Run a playbook: from a row, from a tag row, or from the palette.
+ * Run a playbook from the palette, or from a caller passing a node.
  *
- * `withOptions` is the ⚙ path, which asks. Without it the node may still carry
- * a single tag -- that is a tag row, which runs the playbook with only that
- * one. It goes through the same parse the picker's result does, because it
+ * `withOptions` is the path that asks. Without it the node may still carry a
+ * single tag, which runs the playbook with only that one. It goes through the same parse the picker's result does, because it
  * reaches a command line either way.
  *
  * @param {vscode.ExtensionContext} context

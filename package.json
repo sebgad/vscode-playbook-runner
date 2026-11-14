@@ -135,7 +135,7 @@
         "playbookRunner.envFileName": {
           "type": "string",
           "default": "env.yml",
-          "description": "Unencrypted variables filename inside each group_vars group. Shown as the service's Env row, which opens it in the editor."
+          "description": "Unencrypted variables filename inside each group_vars group. The dashboard links it on each service, opening it in the editor."
         },
         "playbookRunner.vaultFileName": {
           "type": "string",

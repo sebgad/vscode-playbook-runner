@@ -4,7 +4,7 @@
  * It renders what the extension sends (the model, one outline per expanded
  * playbook, the command-line preview) and asks for things by message. It
  * decides nothing that reaches ansible: the extension rebuilds every message
- * and runs through the same path the sidebar uses. The command line shown at
+ * and runs through the same path the palette commands use. The command line shown at
  * the bottom is built by the extension, not here.
  */
 
@@ -125,7 +125,38 @@
     if (!model || !model.folders.length) {
       return null;
     }
-    return model.folders.find((/** @type {any} */ f) => f.path === state.folder) || model.folders[0];
+    // Without a choice yet, a folder that has environments: in a multi-root
+    // workspace the first folder may well be one without any.
+    return (
+      model.folders.find((/** @type {any} */ f) => f.path === state.folder) ||
+      model.folders.find((/** @type {any} */ f) => f.environments.length) ||
+      model.folders[0]
+    );
+  }
+
+  /**
+   * The workspace-folder switcher, shown whenever there is more than one --
+   * also on the empty state, or a folder without environments would be a dead
+   * end.
+   *
+   * @param {any} folder
+   */
+  function folderSelect(folder) {
+    if (model.folders.length < 2) {
+      return null;
+    }
+    return h(
+      "select",
+      {
+        "aria-label": "Workspace folder",
+        "data-key": "folder",
+        onchange: (/** @type {Event} */ e) => {
+          state.folder = /** @type {HTMLSelectElement} */ (e.target).value;
+          changed();
+        },
+      },
+      model.folders.map((/** @type {any} */ f) => h("option", { value: f.path, selected: f.path === folder.path }, f.name)),
+    );
   }
 
   /** @param {any} folder */
@@ -344,22 +375,7 @@
       "header",
       { class: "topbar" },
       h("h1", null, icon("run-all"), "Playbook Runner"),
-      model.folders.length > 1
-        ? h(
-            "select",
-            {
-              "aria-label": "Workspace folder",
-              "data-key": "folder",
-              onchange: (/** @type {Event} */ e) => {
-                state.folder = /** @type {HTMLSelectElement} */ (e.target).value;
-                changed();
-              },
-            },
-            model.folders.map((/** @type {any} */ f) =>
-              h("option", { value: f.path, selected: f.path === folder.path }, f.name),
-            ),
-          )
-        : null,
+      folderSelect(folder),
       h("span", { class: "spacer" }),
       h(
         "div",
@@ -991,7 +1007,8 @@
         h(
           "div",
           { class: "empty-state" },
-          h("h2", null, icon("search"), " No Ansible environments found"),
+          folderSelect(folder),
+          h("h2", null, icon("search"), ` No Ansible environments found in ${folder.name}`),
           h(
             "p",
             null,
