@@ -30,6 +30,7 @@ const path = require("path");
 const vscode = require("vscode");
 
 const command = require("./command");
+const { playbookArgv } = require("./model");
 const { resolveVaultPasswordFile } = require("./paths");
 
 const VAULT_TERMINAL = "Ansible Vault";
@@ -65,12 +66,8 @@ function quoteArgs(args) {
 function runPlaybook(folder, settings, request) {
   const root = folder.uri.fsPath;
   const playbook = path.relative(root, request.playbookFile);
-  const args = command.buildPlaybookArgs({
-    inventory: path.relative(root, request.environment.inventory),
-    playbook,
-    vaultPasswordFile: resolveVaultPasswordFile(settings, request.environment.name, root),
-    options: request.options,
-  });
+  // The same argv the dashboard previews -- see model.playbookArgv.
+  const args = playbookArgv(root, settings, request.environment, request.playbookFile, request.options || {});
 
   const execution = new vscode.ShellExecution(
     settings.ansiblePlaybookCommand,
