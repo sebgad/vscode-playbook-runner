@@ -53,7 +53,7 @@ const environment = (name) =>
   );
 
 before(() => {
-  root = makeFixture(FIXTURE, { prefix: "homelab-discovery-" });
+  root = makeFixture(FIXTURE, { prefix: "playbook-runner-discovery-" });
 });
 
 after(() => {
@@ -131,9 +131,9 @@ describe("findPlaybooks", () => {
 describe("listPlaybookFiles", () => {
   it("follows a symlinked directory but stops at a cycle", (t) => {
     const repo = makeFixture(["a/one.yml", "a/deeper/two.yml"], {
-      prefix: "homelab-symlink-",
+      prefix: "playbook-runner-symlink-",
     });
-    const elsewhere = makeFixture(["extra.yml"], { prefix: "homelab-linked-" });
+    const elsewhere = makeFixture(["extra.yml"], { prefix: "playbook-runner-linked-" });
     t.after(() => {
       removeFixture(repo);
       removeFixture(elsewhere);

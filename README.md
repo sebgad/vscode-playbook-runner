@@ -1,4 +1,4 @@
-# Ansible Runner
+# Playbook Runner
 
 A VS Code sidebar for running this repository's Ansible playbooks and editing
 its vaults. Environments, playbooks and vaults are **discovered from the
@@ -14,8 +14,8 @@ one `env.yml` and one `vault.yml`, so those are rows that act on click rather
 than folders to open.
 
 ```
-Ansible Runner (activity bar)
-├── production                       ← red: matches homelab.productionPattern
+Playbook Runner (activity bar)
+├── production                       ← red: matches playbookRunner.productionPattern
 │   ├── authentik               1
 │   │   ├── Playbooks           1
 │   │   │   └── ▶ authentik.yml     ← click opens it, ▶ / ⚙ run it
@@ -60,8 +60,8 @@ Ansible Runner (activity bar)
   every vault in that environment in one `ansible-vault rekey`. One environment
   at a time, because the passphrase is per environment.
 * Production rows are red and ask for confirmation before running
-  (`homelab.confirmProduction`).
-* The command palette offers the same thing without the tree: *Ansible Runner: Run
+  (`playbookRunner.confirmProduction`).
+* The command palette offers the same thing without the tree: *Playbook Runner: Run
   Playbook* walks environment → service → playbook as QuickPicks, which is the
   flow the old `run-ansible-playbooks.sh` had with `read -p`.
 
@@ -72,7 +72,7 @@ are the same list, so both show the tags that playbook has rather than an empty
 box to type into. They are read out of the YAML: the playbook,
 every playbook it `import_playbook`s, and the task files of the roles it pulls
 in through `roles:`, `import_role` or `include_role` — `roles/` by default,
-`homelab.rolesDir` otherwise, which is `ansible.cfg`'s `roles_path`.
+`playbookRunner.rolesDir` otherwise, which is `ansible.cfg`'s `roles_path`.
 
 They are listed in the order the run reaches them, with a play's own tags above
 the ones that live inside the roles it imports, and each of the latter labelled
@@ -95,7 +95,7 @@ straight there.
 
 ## Rotating vault passphrases
 
-*Ansible Runner: Rekey Vaults…*, or the same command on an environment's context menu,
+*Playbook Runner: Rekey Vaults…*, or the same command on an environment's context menu,
 hands every `vault.yml` in that environment to one `ansible-vault rekey`. It
 asks once for the current passphrase and twice for the new one; production asks
 to confirm a second time.
@@ -103,7 +103,7 @@ to confirm a second time.
 The new passphrase is **never** an argument — `--new-vault-password-file` is
 deliberately not passed, so ansible prompts instead and the passphrase stays out
 of the process table and the shell history. A configured
-`homelab.vaultPasswordFiles` entry is passed as the *current* passphrase only.
+`playbookRunner.vaultPasswordFiles` entry is passed as the *current* passphrase only.
 
 Two things the confirmation says, because both are easy to get wrong:
 
@@ -117,7 +117,7 @@ Two things the confirmation says, because both are easy to get wrong:
 
 ## Adding a service
 
-*Ansible Runner: Create Service Skeleton…* (the ＋ folder button in the view title)
+*Playbook Runner: Create Service Skeleton…* (the ＋ folder button in the view title)
 asks for a name and lays out the directories a service consists of:
 
 ```
@@ -131,6 +131,11 @@ inventories/staging/group_vars/<name>/env.yml      ← empty
   exists in `production` and is missing from `staging` is the failure mode this
   removes; running it on a name that already exists fills in only the parts
   that are missing.
+* **Which environments** is `playbookRunner.serviceEnvironments`: empty (the default)
+  is all of them, `["staging"]` lays out only staging. A listed name with no
+  `hosts.ini` behind it is skipped and named in the confirmation — the command
+  never creates an inventory, because a directory without one is not an
+  environment and its group_vars would never show up in the tree.
 * **Structure only.** The env files are created empty, and an env file that
   already exists is never touched — it is opened with `wx`, not truncated.
 * **No vault is created.** A `vault.yml` has to be written encrypted, so the
@@ -185,8 +190,8 @@ gets run. That matters for the password file too: ansible *executes* a
 
 Per environment, in this order:
 
-1. `homelab.vaultPasswordFiles["<env>"]`, if set.
-2. `homelab.vaultPasswordFilePattern`, by default
+1. `playbookRunner.vaultPasswordFiles["<env>"]`, if set.
+2. `playbookRunner.vaultPasswordFilePattern`, by default
    `${userHome}/.ansible-vault/${env}.pass`.
 3. If the resolved file does not exist → `--ask-vault-password`.
 
@@ -195,7 +200,7 @@ Out of the box that reproduces today's behaviour: `staging` picks up
 production prompting, point it at the `prod.pass` you already have:
 
 ```jsonc
-"homelab.vaultPasswordFiles": {
+"playbookRunner.vaultPasswordFiles": {
   "production": "${userHome}/.ansible-vault/prod.pass"
 }
 ```
@@ -210,15 +215,15 @@ Two ways to install it:
 ```bash
 cd scripts/vscode-extension
 npm install          # dev tooling only; the extension itself has no dependencies
-npm run package      # -> dist/ansible-runner-<version>.vsix
-code --install-extension dist/ansible-runner-0.4.0.vsix
+npm run package      # -> dist/playbook-runner-<version>.vsix
+code --install-extension dist/playbook-runner-0.4.0.vsix
 ```
 
 **As a symlink**, if you would rather have `git pull` be the update mechanism:
 
 ```bash
 ln -s ~/Programmierprojekte/homelab-infra/scripts/vscode-extension \
-      ~/.vscode/extensions/ansible-runner-0.4.0
+      ~/.vscode/extensions/playbook-runner-0.4.0
 ```
 
 An existing symlink from an older version keeps working; VS Code reads
@@ -231,26 +236,27 @@ afterwards. For VS Code Insiders or the Flatpak build, use
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `homelab.playbooksDir` | `playbooks` | Where the playbook folders live. |
-| `homelab.rolesDir` | `roles` | `ansible.cfg`'s `roles_path`; read when collecting the tags a playbook offers. |
-| `homelab.inventoriesDir` | `inventories` | One subdirectory per environment. |
-| `homelab.inventoryFile` | `hosts.ini` | A directory counts as an environment when it contains this. |
-| `homelab.groupVarsDir` | `group_vars` | Group variables directory inside an environment. |
-| `homelab.envFileName` | `env.yml` | Unencrypted variables filename inside a group; the *Env* row opens it. |
-| `homelab.vaultFileName` | `vault.yml` | Vault filename inside a group. |
-| `homelab.vaultPasswordFilePattern` ⁽ᵐ⁾ | `${userHome}/.ansible-vault/${env}.pass` | Supports `${userHome}`, `${workspaceFolder}`, `${env}`. Empty string always prompts. |
-| `homelab.vaultPasswordFiles` ⁽ᵐ⁾ | `{}` | Per-environment override of the pattern. |
-| `homelab.productionPattern` | `production` | Case-insensitive regex; matching environments are red and confirmed. Empty disables. |
-| `homelab.confirmProduction` | `true` | Ask before running against a production environment. |
-| `homelab.ansiblePlaybookCommand` ⁽ᵐ⁾ | `ansible-playbook` | Point at a virtualenv if ansible is not on `PATH`; a wrapper such as `uv run ansible-playbook` works too. |
-| `homelab.ansibleVaultCommand` ⁽ᵐ⁾ | `ansible-vault` | |
+| `playbookRunner.playbooksDir` | `playbooks` | Where the playbook folders live. |
+| `playbookRunner.rolesDir` | `roles` | `ansible.cfg`'s `roles_path`; read when collecting the tags a playbook offers. |
+| `playbookRunner.inventoriesDir` | `inventories` | One subdirectory per environment. |
+| `playbookRunner.inventoryFile` | `hosts.ini` | A directory counts as an environment when it contains this. |
+| `playbookRunner.groupVarsDir` | `group_vars` | Group variables directory inside an environment. |
+| `playbookRunner.envFileName` | `env.yml` | Unencrypted variables filename inside a group; the *Env* row opens it. |
+| `playbookRunner.vaultFileName` | `vault.yml` | Vault filename inside a group. |
+| `playbookRunner.vaultPasswordFilePattern` ⁽ᵐ⁾ | `${userHome}/.ansible-vault/${env}.pass` | Supports `${userHome}`, `${workspaceFolder}`, `${env}`. Empty string always prompts. |
+| `playbookRunner.vaultPasswordFiles` ⁽ᵐ⁾ | `{}` | Per-environment override of the pattern. |
+| `playbookRunner.productionPattern` | `production` | Case-insensitive regex; matching environments are red and confirmed. Empty disables. |
+| `playbookRunner.confirmProduction` | `true` | Ask before running against a production environment. |
+| `playbookRunner.ansiblePlaybookCommand` ⁽ᵐ⁾ | `ansible-playbook` | Point at a virtualenv if ansible is not on `PATH`; a wrapper such as `uv run ansible-playbook` works too. |
+| `playbookRunner.ansibleVaultCommand` ⁽ᵐ⁾ | `ansible-vault` | |
+| `playbookRunner.serviceEnvironments` | `[]` | Environments *Create Service Skeleton…* lays a service out in. Empty means every environment; a name that is not an environment is skipped, never created. |
 
 ⁽ᵐ⁾ `machine` scope: user settings only, not settable by a workspace.
 
-`homelabTasks.productionPattern` from 0.1 is still honoured as long as
-`homelab.productionPattern` has not been given a value of its own, and the
-`homelabTasks.refresh` command id still resolves, so an existing keybinding
-keeps working.
+The `homelab.*` and `homelabTasks.*` keys and command IDs of earlier versions
+are no longer read. Settings, keybindings and `tasks.json` entries
+(`"type": "homelab"`) written for them have to be renamed to
+`playbookRunner.*` (task type `playbook-runner`).
 
 ## Development
 
@@ -281,7 +287,7 @@ npm run check     # lint + typecheck + tests, the one to run before committing
 npm run lint      # eslint
 npm run typecheck # tsc over the JSDoc types; nothing is emitted
 npm test          # node --test
-npm run package   # dist/ansible-runner-<version>.vsix
+npm run package   # dist/playbook-runner-<version>.vsix
 ```
 
 Types are JSDoc, checked with `tsc --noEmit` under `strict`; there is no

@@ -2,18 +2,26 @@
 
 ## Unreleased
 
-* Renamed from *Homelab* (`homelab-tasks`) to *Ansible Runner*
-  (`ansible-runner`): the activity bar, the command palette category, the task
+* Renamed from *Homelab* (`homelab-tasks`) to *Playbook Runner*
+  (`playbook-runner`): the activity bar, the command palette category, the task
   source and the prefix of every notification. The extension ID is now
-  `sebgad.ansible-runner`, so a `.vsix` install of the old one has to be
+  `sebgad.playbook-runner`, so a `.vsix` install of the old one has to be
   uninstalled by hand, and the last run and remembered run options — kept per
   extension ID — start empty once.
-* Setting keys (`homelab.*`, `homelabTasks.*`), command IDs, the view ID and
-  the `homelab` task type are unchanged, so existing settings, keybindings and
-  `tasks.json` entries keep working.
+* **Breaking:** every identifier moved with it, with no fallback. Settings are
+  `playbookRunner.*` instead of `homelab.*`, commands
+  `playbookRunner.<command>`, the view `playbookRunnerExplorer` and the task
+  type `playbook-runner`. Old `homelab.*` settings, keybindings and
+  `"type": "homelab"` entries in `tasks.json` are ignored until renamed, and
+  the 0.1 names (`homelabTasks.productionPattern`, `homelabTasks.refresh`) are
+  no longer honoured either.
 * New icon: the running figure from [Tabler Icons](https://tabler.io/icons)
   (MIT), replacing the Ansible logo, which is a Red Hat trademark.
   `media/icon.svg` is the source of `media/icon.png`.
+* New setting `playbookRunner.serviceEnvironments`: the environments *Create Service
+  Skeleton…* creates `group_vars/<name>/` in. Empty (the default) keeps the old
+  behaviour of every environment. A listed name that is not an environment is
+  skipped and named in the confirmation, never created.
 
 ## 0.4.0
 

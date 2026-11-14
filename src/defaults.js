@@ -1,5 +1,5 @@
 /**
- * Default values for every homelab.* setting.
+ * Default values for every playbookRunner.* setting.
  *
  * Kept in its own module so that both the settings reader (which needs
  * `vscode`) and the discovery layer (which deliberately does not) can share
@@ -26,6 +26,7 @@
  * @property {boolean} confirmProduction
  * @property {string} ansiblePlaybookCommand
  * @property {string} ansibleVaultCommand
+ * @property {string[]} serviceEnvironments
  */
 
 /** @type {Settings} */
@@ -48,6 +49,10 @@ const DEFAULTS = {
   confirmProduction: true,
   ansiblePlaybookCommand: "ansible-playbook",
   ansibleVaultCommand: "ansible-vault",
+
+  // Which environments Create Service Skeleton lays a service out in. Empty
+  // means every environment discovered under inventoriesDir.
+  serviceEnvironments: [],
 };
 
 module.exports = DEFAULTS;

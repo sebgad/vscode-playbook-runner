@@ -1,5 +1,5 @@
 /**
- * Ansible Runner — an Ansible sidebar for this repository.
+ * Playbook Runner — an Ansible sidebar for this repository.
  *
  * Playbooks, environments and vaults are discovered from the filesystem
  * (src/discovery.js), so no path, and in particular no environment name, is
@@ -20,9 +20,9 @@ const runner = require("./src/runner");
 const pickers = require("./src/pickers");
 const scaffold = require("./src/scaffold");
 const { readSettings } = require("./src/settings");
-const { HomelabTreeProvider } = require("./src/tree");
+const { PlaybookRunnerTreeProvider } = require("./src/tree");
 
-const LAST_RUN_KEY = "homelab.lastRun";
+const LAST_RUN_KEY = "playbookRunner.lastRun";
 
 /**
  * A tree node, as it arrives back through a command argument. Every field is
@@ -175,7 +175,7 @@ async function runPlaybookCommand(context, argument, withOptions) {
   try {
     await runner.runPlaybook(folder, settings, { environment, playbookFile, options });
   } catch (err) {
-    vscode.window.showErrorMessage(`Ansible Runner: could not run ${label}: ${messageOf(err)}`);
+    vscode.window.showErrorMessage(`Playbook Runner: could not run ${label}: ${messageOf(err)}`);
   }
 }
 
@@ -183,7 +183,7 @@ async function runPlaybookCommand(context, argument, withOptions) {
 async function rerunLast(context) {
   const last = parseLastRun(context.workspaceState.get(LAST_RUN_KEY));
   if (!last) {
-    vscode.window.showInformationMessage("Ansible Runner: nothing has been run yet.");
+    vscode.window.showInformationMessage("Playbook Runner: nothing has been run yet.");
     return;
   }
 
@@ -191,7 +191,7 @@ async function rerunLast(context) {
     (item) => item.uri.fsPath === last.folderPath,
   );
   if (!folder) {
-    vscode.window.showErrorMessage("Ansible Runner: the folder of the last run is no longer open.");
+    vscode.window.showErrorMessage("Playbook Runner: the folder of the last run is no longer open.");
     return;
   }
 
@@ -201,7 +201,7 @@ async function rerunLast(context) {
   );
   if (!environment) {
     vscode.window.showErrorMessage(
-      `Ansible Runner: environment "${last.environmentName}" no longer exists.`,
+      `Playbook Runner: environment "${last.environmentName}" no longer exists.`,
     );
     return;
   }
@@ -219,7 +219,7 @@ async function rerunLast(context) {
       options: last.options,
     });
   } catch (err) {
-    vscode.window.showErrorMessage(`Ansible Runner: could not run ${label}: ${messageOf(err)}`);
+    vscode.window.showErrorMessage(`Playbook Runner: could not run ${label}: ${messageOf(err)}`);
   }
 }
 
@@ -252,7 +252,7 @@ async function vaultCommand(argument, action) {
     runner.runVaultCommand(folder, settings, { environment, vaultFile, action });
   } catch (err) {
     vscode.window.showErrorMessage(
-      `Ansible Runner: could not ${action} the vault: ${messageOf(err)}`,
+      `Playbook Runner: could not ${action} the vault: ${messageOf(err)}`,
     );
   }
 }
@@ -261,7 +261,7 @@ async function vaultCommand(argument, action) {
  * Rotate the passphrase of every vault in one environment.
  *
  * One environment per invocation on purpose. The passphrase is per environment
- * -- homelab.vaultPasswordFiles is keyed by environment name -- so "rekey
+ * -- playbookRunner.vaultPasswordFiles is keyed by environment name -- so "rekey
  * everything" is not one operation but one per environment, each with its own
  * old and new passphrase. Offering it across all of them would only mean typing
  * the wrong passphrase into the wrong set of files.
@@ -281,7 +281,7 @@ async function rekeyVaultsCommand(argument) {
     .map((group) => group.vaultFile);
   if (!vaultFiles.length) {
     vscode.window.showErrorMessage(
-      `Ansible Runner: no ${settings.vaultFileName} in ${environment.name} to rekey.`,
+      `Playbook Runner: no ${settings.vaultFileName} in ${environment.name} to rekey.`,
     );
     return;
   }
@@ -303,7 +303,7 @@ async function rekeyVaultsCommand(argument) {
     runner.runVaultRekey(folder, settings, { environment, vaultFiles });
   } catch (err) {
     vscode.window.showErrorMessage(
-      `Ansible Runner: could not rekey the vaults of ${environment.name}: ${messageOf(err)}`,
+      `Playbook Runner: could not rekey the vaults of ${environment.name}: ${messageOf(err)}`,
     );
   }
 }
@@ -321,14 +321,15 @@ async function openFile(argument, key) {
     const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
     await vscode.window.showTextDocument(document);
   } catch (err) {
-    vscode.window.showErrorMessage(`Ansible Runner: could not open ${file}: ${messageOf(err)}`);
+    vscode.window.showErrorMessage(`Playbook Runner: could not open ${file}: ${messageOf(err)}`);
   }
 }
 
 /**
  * Lay out the directories of a new service: playbooks/<name>/ once, and a
- * group_vars/<name>/ with an empty env file in every environment, so a service
- * cannot end up existing in one environment and missing from another.
+ * group_vars/<name>/ with an empty env file in every environment (or in those
+ * playbookRunner.serviceEnvironments names), so a service cannot end up existing in
+ * one environment and missing from another.
  *
  * The plan is shown before anything is written, and only what is missing is
  * created -- an env file that exists is never touched. The vault is left to
@@ -356,14 +357,14 @@ async function createServiceSkeleton(argument, refresh) {
   try {
     plan = scaffold.planService(root, name, settings);
   } catch (err) {
-    vscode.window.showErrorMessage(`Ansible Runner: ${messageOf(err)}`);
+    vscode.window.showErrorMessage(`Playbook Runner: ${messageOf(err)}`);
     return;
   }
 
   const missing = plan.entries.filter((entry) => !entry.exists);
   if (!missing.length) {
     vscode.window.showInformationMessage(
-      `Ansible Runner: ${plan.name} already has every directory; nothing to create.`,
+      `Playbook Runner: ${plan.name} already has every directory; nothing to create.`,
     );
     return;
   }
@@ -371,9 +372,22 @@ async function createServiceSkeleton(argument, refresh) {
   const detail = missing
     .map((entry) => (entry.type === "directory" ? `${entry.relative}/` : entry.relative))
     .join("\n");
-  const note = plan.environments.length
-    ? ""
-    : `\n\nNo environment found under ${settings.inventoriesDir}/, so only the playbook folder is created.`;
+  const notes = [];
+  if (plan.unknownEnvironments.length) {
+    notes.push(
+      `playbookRunner.serviceEnvironments names ${plan.unknownEnvironments.join(", ")}, which ${plan.unknownEnvironments.length === 1 ? "is not an environment" : "are not environments"} (no ${settings.inventoryFile} under ${settings.inventoriesDir}/) — skipped.`,
+    );
+  }
+  if (!plan.environments.length) {
+    notes.push(
+      plan.limited
+        ? "None of the environments in playbookRunner.serviceEnvironments exist, so only the playbook folder is created."
+        : `No environment found under ${settings.inventoriesDir}/, so only the playbook folder is created.`,
+    );
+  } else if (plan.limited) {
+    notes.push(`Environments limited by playbookRunner.serviceEnvironments: ${plan.environments.join(", ")}.`);
+  }
+  const note = notes.map((line) => `\n\n${line}`).join("");
   const answer = await vscode.window.showInformationMessage(
     `Create the skeleton for ${plan.name}?`,
     { modal: true, detail: `${detail}${note}` },
@@ -387,11 +401,11 @@ async function createServiceSkeleton(argument, refresh) {
     const { created } = scaffold.createSkeleton(plan);
     refresh();
     vscode.window.showInformationMessage(
-      `Ansible Runner: created ${created.length} ${created.length === 1 ? "entry" : "entries"} for ${plan.name}.`,
+      `Playbook Runner: created ${created.length} ${created.length === 1 ? "entry" : "entries"} for ${plan.name}.`,
     );
   } catch (err) {
     vscode.window.showErrorMessage(
-      `Ansible Runner: could not create the skeleton for ${plan.name}: ${messageOf(err)}`,
+      `Playbook Runner: could not create the skeleton for ${plan.name}: ${messageOf(err)}`,
     );
   }
 }
@@ -444,7 +458,7 @@ class Watchers {
 
 /** @param {vscode.ExtensionContext} context */
 function activate(context) {
-  const provider = new HomelabTreeProvider();
+  const provider = new PlaybookRunnerTreeProvider();
   const refresh = () => provider.refresh();
   const watchers = new Watchers(refresh);
 
@@ -455,35 +469,29 @@ function activate(context) {
   const register = (id, handler) => vscode.commands.registerCommand(id, handler);
 
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider("homelabExplorer", provider),
+    vscode.window.registerTreeDataProvider("playbookRunnerExplorer", provider),
     watchers,
 
-    register("homelab.runPlaybook", (node) => runPlaybookCommand(context, node, false)),
-    register("homelab.runPlaybookWithOptions", (node) =>
+    register("playbookRunner.runPlaybook", (node) => runPlaybookCommand(context, node, false)),
+    register("playbookRunner.runPlaybookWithOptions", (node) =>
       runPlaybookCommand(context, node, true),
     ),
-    register("homelab.runPlaybookTag", (node) => runPlaybookCommand(context, node, false)),
-    register("homelab.rerunLast", () => rerunLast(context)),
-    register("homelab.editVault", (node) => vaultCommand(node, "edit")),
-    register("homelab.createVault", (node) => vaultCommand(node, "create")),
-    register("homelab.rekeyVaults", (node) => rekeyVaultsCommand(node)),
-    register("homelab.openPlaybook", (node) => openFile(node, "playbookFile")),
-    register("homelab.openEnv", (node) => openFile(node, "envFile")),
-    register("homelab.createService", (node) => createServiceSkeleton(node, refresh)),
-    register("homelab.refresh", refresh),
-
-    // 0.1 command id, kept so existing keybindings keep working.
-    register("homelabTasks.refresh", refresh),
+    register("playbookRunner.runPlaybookTag", (node) => runPlaybookCommand(context, node, false)),
+    register("playbookRunner.rerunLast", () => rerunLast(context)),
+    register("playbookRunner.editVault", (node) => vaultCommand(node, "edit")),
+    register("playbookRunner.createVault", (node) => vaultCommand(node, "create")),
+    register("playbookRunner.rekeyVaults", (node) => rekeyVaultsCommand(node)),
+    register("playbookRunner.openPlaybook", (node) => openFile(node, "playbookFile")),
+    register("playbookRunner.openEnv", (node) => openFile(node, "envFile")),
+    register("playbookRunner.createService", (node) => createServiceSkeleton(node, refresh)),
+    register("playbookRunner.refresh", refresh),
 
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       watchers.rebuild();
       refresh();
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (
-        event.affectsConfiguration("homelab") ||
-        event.affectsConfiguration("homelabTasks")
-      ) {
+      if (event.affectsConfiguration("playbookRunner")) {
         watchers.rebuild();
         refresh();
       }

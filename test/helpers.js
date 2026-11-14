@@ -37,7 +37,7 @@ function required(value, what) {
  * @returns {string} the root directory
  */
 function makeFixture(files, opts = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), opts.prefix || "homelab-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), opts.prefix || "playbook-runner-"));
   for (const entry of files) {
     const [relative, content] = Array.isArray(entry) ? entry : [entry, ""];
     const full = path.join(root, relative);

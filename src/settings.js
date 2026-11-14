@@ -1,5 +1,5 @@
 /**
- * Reading the homelab.* settings.
+ * Reading the playbookRunner.* settings.
  *
  * Everything here is the `vscode` side: getting values out of the workspace
  * configuration and telling the user when one of them is unusable. The path
@@ -13,23 +13,7 @@ const vscode = require("vscode");
 const DEFAULTS = require("./defaults");
 const paths = require("./paths");
 
-const SECTION = "homelab";
-const LEGACY_SECTION = "homelabTasks";
-
-/**
- * True when a setting was written by the user somewhere, rather than just
- * carrying its contributed default.
- *
- * @param {{ globalValue?: unknown, workspaceValue?: unknown, workspaceFolderValue?: unknown } | undefined} inspected
- */
-function hasExplicitValue(inspected) {
-  return Boolean(
-    inspected &&
-      (inspected.globalValue !== undefined ||
-        inspected.workspaceValue !== undefined ||
-        inspected.workspaceFolderValue !== undefined),
-  );
-}
+const SECTION = "playbookRunner";
 
 /**
  * Whether a configured value can stand in for the default. VS Code validates
@@ -64,18 +48,6 @@ function readSettings(folder) {
     settings[key] = matchesShape(value, fallback) ? value : fallback;
   }
 
-  // homelabTasks.productionPattern was the 0.1 name. Honour it as long as the
-  // new setting has not been given a value of its own.
-  const legacy = vscode.workspace
-    .getConfiguration(LEGACY_SECTION, scope)
-    .inspect("productionPattern");
-  if (!hasExplicitValue(config.inspect("productionPattern")) && hasExplicitValue(legacy)) {
-    const value = legacy?.workspaceFolderValue ?? legacy?.workspaceValue ?? legacy?.globalValue;
-    if (typeof value === "string") {
-      settings.productionPattern = value;
-    }
-  }
-
   return /** @type {import("./defaults").Settings} */ (settings);
 }
 
@@ -92,7 +64,7 @@ function productionPattern(settings) {
   const { pattern, error } = paths.compileProductionPattern(settings.productionPattern);
   if (error) {
     vscode.window.showWarningMessage(
-      `Ansible Runner: homelab.productionPattern is not a valid regular expression (${error}). No environment will be treated as production.`,
+      `Playbook Runner: playbookRunner.productionPattern is not a valid regular expression (${error}). No environment will be treated as production.`,
     );
   }
   return pattern;

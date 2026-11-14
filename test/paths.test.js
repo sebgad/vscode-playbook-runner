@@ -30,7 +30,7 @@ let root = "";
 const settingsWith = (overrides) => ({ ...DEFAULTS, ...overrides });
 
 before(() => {
-  root = makeFixture(["secrets/production.pass", "hosts.ini"], { prefix: "homelab-paths-" });
+  root = makeFixture(["secrets/production.pass", "hosts.ini"], { prefix: "playbook-runner-paths-" });
 });
 
 after(() => {

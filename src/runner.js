@@ -75,10 +75,10 @@ function runPlaybook(folder, settings, request) {
 
   const label = command.playbookLabel(root, settings, request.playbookFile);
   const task = new vscode.Task(
-    { type: "homelab", environment: request.environment.name, playbook },
+    { type: "playbook-runner", environment: request.environment.name, playbook },
     folder,
     `${request.environment.name}: ${label}`,
-    "Ansible Runner",
+    "Playbook Runner",
     execution,
   );
 

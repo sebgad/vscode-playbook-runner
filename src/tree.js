@@ -1,5 +1,5 @@
 /**
- * The Ansible Runner sidebar tree.
+ * The Playbook Runner sidebar tree.
  *
  *   <environment>          production, staging, …
  *     <service>            playbooks/<name> joined with group_vars/<name>
@@ -38,7 +38,7 @@ class MessageNode extends vscode.TreeItem {
   constructor(message, icon = "info") {
     super(message, vscode.TreeItemCollapsibleState.None);
     this.iconPath = new vscode.ThemeIcon(icon);
-    this.contextValue = "homelab.message";
+    this.contextValue = "playbookRunner.message";
   }
 }
 
@@ -55,7 +55,7 @@ class EnvironmentNode extends vscode.TreeItem {
     this.folder = folder;
     this.settings = settings;
     this.isProduction = isProduction;
-    this.contextValue = "homelab.environment";
+    this.contextValue = "playbookRunner.environment";
     this.iconPath = new vscode.ThemeIcon(
       isProduction ? "server-environment" : "beaker",
       isProduction ? PRODUCTION_COLOR : NEUTRAL_COLOR,
@@ -82,7 +82,7 @@ class SectionNode extends vscode.TreeItem {
   constructor(name, icon, childrenOf, count) {
     super(name, vscode.TreeItemCollapsibleState.Collapsed);
     this.childrenOf = childrenOf;
-    this.contextValue = "homelab.section";
+    this.contextValue = "playbookRunner.section";
     this.iconPath = new vscode.ThemeIcon(icon);
     if (typeof count === "number") {
       this.description = `${count}`;
@@ -104,7 +104,7 @@ class ServiceNode extends vscode.TreeItem {
     this.folder = parent.folder;
     this.settings = parent.settings;
     this.isProduction = parent.isProduction;
-    this.contextValue = "homelab.service";
+    this.contextValue = "playbookRunner.service";
     this.iconPath = new vscode.ThemeIcon("server-process");
 
     // No codicons here -- TreeItem.description is plain text.
@@ -154,7 +154,7 @@ class PlaybookNode extends vscode.TreeItem {
     this.folder = parent.folder;
     this.settings = parent.settings;
     this.isProduction = parent.isProduction;
-    this.contextValue = "homelab.playbook";
+    this.contextValue = "playbookRunner.playbook";
     this.resourceUri = vscode.Uri.file(playbook.file);
     this.iconPath = new vscode.ThemeIcon(
       "play",
@@ -186,7 +186,7 @@ class PlaybookNode extends vscode.TreeItem {
     // the editor, and running lives one deliberate move away on the inline
     // buttons -- which is also what keeps a stray click off production.
     this.command = {
-      command: "homelab.openPlaybook",
+      command: "playbookRunner.openPlaybook",
       title: "Open Playbook",
       arguments: [this],
     };
@@ -211,7 +211,7 @@ class TagNode extends vscode.TreeItem {
     this.folder = parent.folder;
     this.settings = parent.settings;
     this.isProduction = parent.isProduction;
-    this.contextValue = "homelab.tag";
+    this.contextValue = "playbookRunner.tag";
     this.iconPath = new vscode.ThemeIcon(
       "tag",
       parent.isProduction ? PRODUCTION_COLOR : NEUTRAL_COLOR,
@@ -243,7 +243,7 @@ class TagNode extends vscode.TreeItem {
     this.tooltip = tooltip;
 
     this.command = {
-      command: "homelab.openPlaybook",
+      command: "playbookRunner.openPlaybook",
       title: "Open Playbook",
       arguments: [this],
     };
@@ -263,7 +263,7 @@ class EnvNode extends vscode.TreeItem {
     this.envFile = group.envFile;
     this.environment = parent.environment;
     this.folder = parent.folder;
-    this.contextValue = "homelab.env";
+    this.contextValue = "playbookRunner.env";
     this.resourceUri = vscode.Uri.file(group.envFile);
     this.iconPath = new vscode.ThemeIcon("symbol-variable", NEUTRAL_COLOR);
 
@@ -273,7 +273,7 @@ class EnvNode extends vscode.TreeItem {
     this.tooltip = tooltip;
 
     this.command = {
-      command: "homelab.openEnv",
+      command: "playbookRunner.openEnv",
       title: "Open Env File",
       arguments: [this],
     };
@@ -291,7 +291,7 @@ class VaultNode extends vscode.TreeItem {
     this.hasVault = group.hasVault;
     this.environment = parent.environment;
     this.folder = parent.folder;
-    this.contextValue = group.hasVault ? "homelab.vault" : "homelab.vaultMissing";
+    this.contextValue = group.hasVault ? "playbookRunner.vault" : "playbookRunner.vaultMissing";
     this.iconPath = new vscode.ThemeIcon(group.hasVault ? "lock" : "add");
     this.description = group.hasVault ? "" : "create";
 
@@ -305,7 +305,7 @@ class VaultNode extends vscode.TreeItem {
     this.tooltip = tooltip;
 
     this.command = {
-      command: group.hasVault ? "homelab.editVault" : "homelab.createVault",
+      command: group.hasVault ? "playbookRunner.editVault" : "playbookRunner.createVault",
       title: group.hasVault ? "Edit Vault" : "Create Vault",
       arguments: [this],
     };
@@ -319,12 +319,12 @@ class FolderNode extends vscode.TreeItem {
   constructor(folder) {
     super(folder.name, vscode.TreeItemCollapsibleState.Expanded);
     this.folder = folder;
-    this.contextValue = "homelab.folder";
+    this.contextValue = "playbookRunner.folder";
     this.iconPath = new vscode.ThemeIcon("root-folder");
   }
 }
 
-class HomelabTreeProvider {
+class PlaybookRunnerTreeProvider {
   constructor() {
     this._onDidChangeTreeData = new vscode.EventEmitter();
     this.onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -345,7 +345,7 @@ class HomelabTreeProvider {
       const folders = vscode.workspace.workspaceFolders || [];
       const [first] = folders;
       if (!first) {
-        return [new MessageNode("Open the homelab repository to see playbooks")];
+        return [new MessageNode("Open a folder with playbooks to see them")];
       }
       if (folders.length === 1) {
         return this.folderChildren(first);
@@ -487,7 +487,7 @@ class HomelabTreeProvider {
 module.exports = {
   EnvNode,
   EnvironmentNode,
-  HomelabTreeProvider,
+  PlaybookRunnerTreeProvider,
   PlaybookNode,
   ServiceNode,
   TagNode,

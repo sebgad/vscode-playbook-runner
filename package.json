@@ -1,7 +1,7 @@
 {
-  "name": "ansible-runner",
-  "displayName": "Ansible Runner",
-  "description": "Ansible sidebar for the homelab repository: run playbooks and manage vaults, discovered from the filesystem.",
+  "name": "playbook-runner",
+  "displayName": "Playbook Runner",
+  "description": "Run Ansible playbooks and manage vaults from the sidebar, discovered from the filesystem.",
   "version": "0.4.0",
   "publisher": "sebgad",
   "private": true,
@@ -13,7 +13,6 @@
   ],
   "keywords": [
     "ansible",
-    "homelab",
     "playbook",
     "vault"
   ],
@@ -51,23 +50,23 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "homelab",
-          "title": "Ansible Runner",
+          "id": "playbookRunner",
+          "title": "Playbook Runner",
           "icon": "media/runner.svg"
         }
       ]
     },
     "views": {
-      "homelab": [
+      "playbookRunner": [
         {
-          "id": "homelabExplorer",
+          "id": "playbookRunnerExplorer",
           "name": "Ansible"
         }
       ]
     },
     "taskDefinitions": [
       {
-        "type": "homelab",
+        "type": "playbook-runner",
         "required": [
           "environment",
           "playbook"
@@ -86,236 +85,245 @@
     ],
     "commands": [
       {
-        "command": "homelab.runPlaybook",
+        "command": "playbookRunner.runPlaybook",
         "title": "Run Playbook",
-        "category": "Ansible Runner",
+        "category": "Playbook Runner",
         "icon": "$(play)"
       },
       {
-        "command": "homelab.runPlaybookWithOptions",
+        "command": "playbookRunner.runPlaybookWithOptions",
         "title": "Run Playbook with Options…",
-        "category": "Ansible Runner",
+        "category": "Playbook Runner",
         "icon": "$(gear)"
       },
       {
-        "command": "homelab.runPlaybookTag",
+        "command": "playbookRunner.runPlaybookTag",
         "title": "Run Playbook with This Tag",
-        "category": "Ansible Runner",
+        "category": "Playbook Runner",
         "icon": "$(play)"
       },
       {
-        "command": "homelab.rerunLast",
+        "command": "playbookRunner.rerunLast",
         "title": "Re-run Last Playbook",
-        "category": "Ansible Runner",
+        "category": "Playbook Runner",
         "icon": "$(debug-restart)"
       },
       {
-        "command": "homelab.editVault",
+        "command": "playbookRunner.editVault",
         "title": "Edit Vault",
-        "category": "Ansible Runner",
+        "category": "Playbook Runner",
         "icon": "$(edit)"
       },
       {
-        "command": "homelab.createVault",
+        "command": "playbookRunner.createVault",
         "title": "Create Vault",
-        "category": "Ansible Runner",
+        "category": "Playbook Runner",
         "icon": "$(add)"
       },
       {
-        "command": "homelab.rekeyVaults",
+        "command": "playbookRunner.rekeyVaults",
         "title": "Rekey Vaults…",
-        "category": "Ansible Runner",
+        "category": "Playbook Runner",
         "icon": "$(key)"
       },
       {
-        "command": "homelab.openPlaybook",
+        "command": "playbookRunner.openPlaybook",
         "title": "Open Playbook",
-        "category": "Ansible Runner",
+        "category": "Playbook Runner",
         "icon": "$(go-to-file)"
       },
       {
-        "command": "homelab.openEnv",
+        "command": "playbookRunner.openEnv",
         "title": "Open Env File",
-        "category": "Ansible Runner",
+        "category": "Playbook Runner",
         "icon": "$(go-to-file)"
       },
       {
-        "command": "homelab.createService",
+        "command": "playbookRunner.createService",
         "title": "Create Service Skeleton…",
-        "category": "Ansible Runner",
+        "category": "Playbook Runner",
         "icon": "$(new-folder)"
       },
       {
-        "command": "homelab.refresh",
+        "command": "playbookRunner.refresh",
         "title": "Refresh",
-        "category": "Ansible Runner",
+        "category": "Playbook Runner",
         "icon": "$(refresh)"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "homelab.refresh",
-          "when": "view == homelabExplorer",
+          "command": "playbookRunner.refresh",
+          "when": "view == playbookRunnerExplorer",
           "group": "navigation@1"
         },
         {
-          "command": "homelab.rerunLast",
-          "when": "view == homelabExplorer",
+          "command": "playbookRunner.rerunLast",
+          "when": "view == playbookRunnerExplorer",
           "group": "navigation@2"
         },
         {
-          "command": "homelab.createService",
-          "when": "view == homelabExplorer",
+          "command": "playbookRunner.createService",
+          "when": "view == playbookRunnerExplorer",
           "group": "navigation@3"
         }
       ],
       "view/item/context": [
         {
-          "command": "homelab.runPlaybook",
-          "when": "view == homelabExplorer && viewItem == homelab.playbook",
+          "command": "playbookRunner.runPlaybook",
+          "when": "view == playbookRunnerExplorer && viewItem == playbookRunner.playbook",
           "group": "inline@1"
         },
         {
-          "command": "homelab.runPlaybookWithOptions",
-          "when": "view == homelabExplorer && viewItem == homelab.playbook",
+          "command": "playbookRunner.runPlaybookWithOptions",
+          "when": "view == playbookRunnerExplorer && viewItem == playbookRunner.playbook",
           "group": "inline@2"
         },
         {
-          "command": "homelab.openPlaybook",
-          "when": "view == homelabExplorer && viewItem == homelab.playbook",
+          "command": "playbookRunner.openPlaybook",
+          "when": "view == playbookRunnerExplorer && viewItem == playbookRunner.playbook",
           "group": "navigation@1"
         },
         {
-          "command": "homelab.runPlaybookTag",
-          "when": "view == homelabExplorer && viewItem == homelab.tag",
+          "command": "playbookRunner.runPlaybookTag",
+          "when": "view == playbookRunnerExplorer && viewItem == playbookRunner.tag",
           "group": "inline"
         },
         {
-          "command": "homelab.openPlaybook",
-          "when": "view == homelabExplorer && viewItem == homelab.tag",
+          "command": "playbookRunner.openPlaybook",
+          "when": "view == playbookRunnerExplorer && viewItem == playbookRunner.tag",
           "group": "navigation@1"
         },
         {
-          "command": "homelab.openEnv",
-          "when": "view == homelabExplorer && viewItem == homelab.env",
+          "command": "playbookRunner.openEnv",
+          "when": "view == playbookRunnerExplorer && viewItem == playbookRunner.env",
           "group": "inline"
         },
         {
-          "command": "homelab.editVault",
-          "when": "view == homelabExplorer && viewItem == homelab.vault",
+          "command": "playbookRunner.editVault",
+          "when": "view == playbookRunnerExplorer && viewItem == playbookRunner.vault",
           "group": "inline"
         },
         {
-          "command": "homelab.createVault",
-          "when": "view == homelabExplorer && viewItem == homelab.vaultMissing",
+          "command": "playbookRunner.createVault",
+          "when": "view == playbookRunnerExplorer && viewItem == playbookRunner.vaultMissing",
           "group": "inline"
         },
         {
-          "command": "homelab.runPlaybook",
-          "when": "view == homelabExplorer && viewItem == homelab.environment",
+          "command": "playbookRunner.runPlaybook",
+          "when": "view == playbookRunnerExplorer && viewItem == playbookRunner.environment",
           "group": "inline"
         },
         {
-          "command": "homelab.rekeyVaults",
-          "when": "view == homelabExplorer && viewItem == homelab.environment",
+          "command": "playbookRunner.rekeyVaults",
+          "when": "view == playbookRunnerExplorer && viewItem == playbookRunner.environment",
           "group": "navigation@1"
         },
         {
-          "command": "homelab.createService",
-          "when": "view == homelabExplorer && viewItem == homelab.folder",
+          "command": "playbookRunner.createService",
+          "when": "view == playbookRunnerExplorer && viewItem == playbookRunner.folder",
           "group": "inline"
         }
       ],
       "commandPalette": [
         {
-          "command": "homelab.runPlaybookTag",
+          "command": "playbookRunner.runPlaybookTag",
           "when": "false"
         },
         {
-          "command": "homelab.openPlaybook",
+          "command": "playbookRunner.openPlaybook",
           "when": "false"
         },
         {
-          "command": "homelab.openEnv",
+          "command": "playbookRunner.openEnv",
           "when": "false"
         }
       ]
     },
     "configuration": {
-      "title": "Ansible Runner",
+      "title": "Playbook Runner",
       "properties": {
-        "homelab.playbooksDir": {
+        "playbookRunner.playbooksDir": {
           "type": "string",
           "default": "playbooks",
           "description": "Directory holding the playbook folders, relative to the workspace folder."
         },
-        "homelab.rolesDir": {
+        "playbookRunner.rolesDir": {
           "type": "string",
           "default": "roles",
           "description": "Directory holding the roles, relative to the workspace folder — ansible.cfg's roles_path. Read when collecting the tags a playbook offers."
         },
-        "homelab.inventoriesDir": {
+        "playbookRunner.inventoriesDir": {
           "type": "string",
           "default": "inventories",
           "description": "Directory holding one subdirectory per environment, relative to the workspace folder."
         },
-        "homelab.inventoryFile": {
+        "playbookRunner.inventoryFile": {
           "type": "string",
           "default": "hosts.ini",
           "description": "Inventory filename. A directory under inventoriesDir counts as an environment when it contains this file."
         },
-        "homelab.groupVarsDir": {
+        "playbookRunner.groupVarsDir": {
           "type": "string",
           "default": "group_vars",
           "description": "Group variables directory inside each environment."
         },
-        "homelab.envFileName": {
+        "playbookRunner.envFileName": {
           "type": "string",
           "default": "env.yml",
           "description": "Unencrypted variables filename inside each group_vars group. Shown as the service's Env row, which opens it in the editor."
         },
-        "homelab.vaultFileName": {
+        "playbookRunner.vaultFileName": {
           "type": "string",
           "default": "vault.yml",
           "description": "Vault filename inside each group_vars group."
         },
-        "homelab.vaultPasswordFilePattern": {
+        "playbookRunner.vaultPasswordFilePattern": {
           "type": "string",
           "default": "${userHome}/.ansible-vault/${env}.pass",
           "scope": "machine",
           "markdownDescription": "Where to look for an environment's vault password file. Supports `${userHome}`, `${workspaceFolder}` and `${env}`. When the resolved file does not exist, `--ask-vault-password` is used instead. Set to an empty string to always be prompted.\n\nUser-level setting only: ansible executes a password file that is marked executable, so a workspace must not be able to point this somewhere else."
         },
-        "homelab.vaultPasswordFiles": {
+        "playbookRunner.vaultPasswordFiles": {
           "type": "object",
           "default": {},
           "scope": "machine",
           "additionalProperties": {
             "type": "string"
           },
-          "markdownDescription": "Per-environment vault password files, overriding `#homelab.vaultPasswordFilePattern#`. Example: `{ \"production\": \"${userHome}/.ansible-vault/prod.pass\" }`.\n\nUser-level setting only, for the same reason as the pattern."
+          "markdownDescription": "Per-environment vault password files, overriding `#playbookRunner.vaultPasswordFilePattern#`. Example: `{ \"production\": \"${userHome}/.ansible-vault/prod.pass\" }`.\n\nUser-level setting only, for the same reason as the pattern."
         },
-        "homelab.productionPattern": {
+        "playbookRunner.productionPattern": {
           "type": "string",
           "default": "production",
           "description": "Case-insensitive regular expression. Matching environment and task names are drawn in red and, unless confirmProduction is off, ask before running. Set to an empty string to disable."
         },
-        "homelab.confirmProduction": {
+        "playbookRunner.confirmProduction": {
           "type": "boolean",
           "default": true,
           "description": "Ask for confirmation before running a playbook against an environment matching productionPattern."
         },
-        "homelab.ansiblePlaybookCommand": {
+        "playbookRunner.ansiblePlaybookCommand": {
           "type": "string",
           "default": "ansible-playbook",
           "scope": "machine",
           "markdownDescription": "Executable used to run playbooks. Point this at a virtualenv if ansible is not on PATH; it is passed to the shell, so a wrapper such as `uv run ansible-playbook` works too.\n\nUser-level setting only: this is what gets executed, so a workspace must not be able to change it."
         },
-        "homelab.ansibleVaultCommand": {
+        "playbookRunner.ansibleVaultCommand": {
           "type": "string",
           "default": "ansible-vault",
           "scope": "machine",
           "markdownDescription": "Executable used for vault create and edit.\n\nUser-level setting only, for the same reason as the playbook command."
+        },
+        "playbookRunner.serviceEnvironments": {
+          "type": "array",
+          "default": [],
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Environments that *Create Service Skeleton…* creates `group_vars/<name>/` in, by directory name under `#playbookRunner.inventoriesDir#`. Empty means every environment. A listed name that is not an environment (no `#playbookRunner.inventoryFile#`) is skipped and named in the confirmation — the command never creates an inventory."
         }
       }
     }

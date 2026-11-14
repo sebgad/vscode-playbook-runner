@@ -98,13 +98,52 @@ function existingServiceNames(root, settings) {
  * @typedef {object} SkeletonPlan
  * @property {string} name
  * @property {string[]} environments  the environments the plan covers
+ * @property {string[]} unknownEnvironments  names in serviceEnvironments that
+ *   are not an environment, and so were left out
+ * @property {boolean} limited  serviceEnvironments narrowed the environments
  * @property {SkeletonEntry[]} entries
  */
 
 /**
+ * Narrow the discovered environments to the ones serviceEnvironments names,
+ * in discovery order. An empty list is every environment. A name with no
+ * environment behind it is reported rather than created: a directory without
+ * an inventory file is not an environment, and laying out group_vars in one
+ * would only make a folder discovery never shows.
+ *
+ * The setting is a hand-edited array, so anything in it that is not a
+ * non-empty string is ignored rather than trusted.
+ *
+ * @template {{ name: string }} T
+ * @param {T[]} environments
+ * @param {unknown[]} wanted
+ * @returns {{ selected: T[], unknown: string[], limited: boolean }}
+ */
+function selectEnvironments(environments, wanted) {
+  const names = [
+    ...new Set(
+      wanted
+        .filter((item) => typeof item === "string")
+        .map((item) => /** @type {string} */ (item).trim())
+        .filter(Boolean),
+    ),
+  ];
+  if (!names.length) {
+    return { selected: environments, unknown: [], limited: false };
+  }
+  const known = new Set(environments.map((item) => item.name));
+  return {
+    selected: environments.filter((item) => names.includes(item.name)),
+    unknown: names.filter((name) => !known.has(name)),
+    limited: true,
+  };
+}
+
+/**
  * What a new service would consist of: the playbook folder once, and a
  * group_vars folder with an empty env file in each environment that exists
- * right now. Nothing is written -- the plan is what the confirmation shows.
+ * right now -- or in each one serviceEnvironments names, when it names any.
+ * Nothing is written -- the plan is what the confirmation shows.
  *
  * @param {string} root workspace folder path
  * @param {string} name
@@ -137,14 +176,23 @@ function planService(root, name, settings) {
 
   add("directory", path.join(root, config.playbooksDir, service));
 
-  const environments = findEnvironments(root, config);
+  const { selected: environments, unknown, limited } = selectEnvironments(
+    findEnvironments(root, config),
+    Array.isArray(config.serviceEnvironments) ? config.serviceEnvironments : [],
+  );
   for (const environment of environments) {
     const dir = path.join(environment.groupVarsDir, service);
     add("directory", dir);
     add("file", path.join(dir, config.envFileName));
   }
 
-  return { name: service, environments: environments.map((item) => item.name), entries };
+  return {
+    name: service,
+    environments: environments.map((item) => item.name),
+    unknownEnvironments: unknown,
+    limited,
+    entries,
+  };
 }
 
 /**
@@ -201,5 +249,6 @@ module.exports = {
   createSkeleton,
   existingServiceNames,
   planService,
+  selectEnvironments,
   validateServiceName,
 };

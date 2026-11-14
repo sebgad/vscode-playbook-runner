@@ -39,7 +39,7 @@ function expandPath(template, vars = {}) {
 
 /**
  * The --vault-password-file for an environment, or null to fall back to
- * --ask-vault-password. An explicit entry in homelab.vaultPasswordFiles wins
+ * --ask-vault-password. An explicit entry in playbookRunner.vaultPasswordFiles wins
  * over the pattern; either way a path that does not exist means "prompt",
  * which is what production does today.
  *
@@ -70,7 +70,7 @@ function resolveVaultPasswordFile(settings, environmentName, folderPath) {
 }
 
 /**
- * Compile homelab.productionPattern. An empty setting switches the whole
+ * Compile playbookRunner.productionPattern. An empty setting switches the whole
  * production treatment off; a pattern that does not compile is reported rather
  * than silently ignored, because "no match" here means "no confirmation".
  *

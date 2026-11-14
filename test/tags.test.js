@@ -157,7 +157,7 @@ describe("findPlaybookTags", () => {
   let root;
 
   before(() => {
-    root = makeFixture(FIXTURE, { prefix: "homelab-tags-" });
+    root = makeFixture(FIXTURE, { prefix: "playbook-runner-tags-" });
   });
   after(() => removeFixture(root));
 

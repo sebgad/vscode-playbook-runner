@@ -34,7 +34,7 @@ the outside-of-VS-Code path. The extension no longer reads `.vscode/tasks.json`
 at all — the sidebar shows only what it discovers itself.
 
 ```
-Homelab (activity bar)
+Playbook Runner (activity bar)
 ├── production                                    ← discovered, red
 │   ├── authentik                  1
 │   │   ├── Playbooks              1
@@ -150,8 +150,8 @@ Arguments are passed as an argv array, so paths with spaces need no manual
 quoting.
 
 **Vault password resolution**, replacing the `staging.pass` literal in
-`tasks.json`: look up `homelab.vaultPasswordFiles[<env>]`, else expand
-`homelab.vaultPasswordFilePattern` (default
+`tasks.json`: look up `playbookRunner.vaultPasswordFiles[<env>]`, else expand
+`playbookRunner.vaultPasswordFilePattern` (default
 `${userHome}/.ansible-vault/${env}.pass`). If the resolved file exists use
 `--vault-password-file`, otherwise fall back to `--ask-vault-password`. On this
 machine that keeps staging silent and — once `prod.pass` is pointed at — makes
@@ -161,34 +161,34 @@ production silent too, without either name appearing in code.
 
 | Setting | Default | Replaces |
 | --- | --- | --- |
-| `homelab.playbooksDir` | `playbooks` | `$SCRIPT_DIR/playbooks` |
-| `homelab.rolesDir` | `roles` | — (new; `ansible.cfg`'s `roles_path`, followed by the tag scan, see step 12) |
-| `homelab.inventoriesDir` | `inventories` | `$SCRIPT_DIR/inventories` |
-| `homelab.inventoryFile` | `hosts.ini` | `inventories/$ENV/hosts.ini` |
-| `homelab.groupVarsDir` | `group_vars` | `$VAULTS_DIR` |
-| `homelab.envFileName` | `env.yml` | — (new; the service's Env row) |
-| `homelab.vaultFileName` | `vault.yml` | `find -name vault.yml` |
-| `homelab.vaultPasswordFilePattern` | `${userHome}/.ansible-vault/${env}.pass` | the `tasks.json` literal |
-| `homelab.vaultPasswordFiles` | `{}` | per-environment override of the pattern |
-| `homelab.productionPattern` | `production` | *(existing)* red styling + confirm |
-| `homelab.confirmProduction` | `true` | — (new safety net; a click on a prod row no longer runs anything, see step 10) |
-| `homelab.ansiblePlaybookCommand` | `ansible-playbook` | — |
-| `homelab.ansibleVaultCommand` | `ansible-vault` | — |
+| `playbookRunner.playbooksDir` | `playbooks` | `$SCRIPT_DIR/playbooks` |
+| `playbookRunner.rolesDir` | `roles` | — (new; `ansible.cfg`'s `roles_path`, followed by the tag scan, see step 12) |
+| `playbookRunner.inventoriesDir` | `inventories` | `$SCRIPT_DIR/inventories` |
+| `playbookRunner.inventoryFile` | `hosts.ini` | `inventories/$ENV/hosts.ini` |
+| `playbookRunner.groupVarsDir` | `group_vars` | `$VAULTS_DIR` |
+| `playbookRunner.envFileName` | `env.yml` | — (new; the service's Env row) |
+| `playbookRunner.vaultFileName` | `vault.yml` | `find -name vault.yml` |
+| `playbookRunner.vaultPasswordFilePattern` | `${userHome}/.ansible-vault/${env}.pass` | the `tasks.json` literal |
+| `playbookRunner.vaultPasswordFiles` | `{}` | per-environment override of the pattern |
+| `playbookRunner.productionPattern` | `production` | *(existing)* red styling + confirm |
+| `playbookRunner.confirmProduction` | `true` | — (new safety net; a click on a prod row no longer runs anything, see step 10) |
+| `playbookRunner.ansiblePlaybookCommand` | `ansible-playbook` | — |
+| `playbookRunner.ansibleVaultCommand` | `ansible-vault` | — |
 
-`homelabTasks.productionPattern` is read as a fallback so an existing setting
-keeps working after the rename.
+The prefix was `homelab.*` (and `homelabTasks.*` before that) until step 15;
+neither is read any more.
 
 ## 7. Commands
 
 | Command | Where |
 | --- | --- |
-| `homelab.runPlaybook` | inline ▶ / palette (QuickPick chain: env → folder → file) |
-| `homelab.runPlaybookWithOptions` | inline ⚙ — tags, verbosity, check, diff, limit |
-| `homelab.rerunLast` | palette; last invocation kept in `workspaceState` |
-| `homelab.editVault` / `homelab.createVault` | the Vault row + palette |
-| `homelab.openEnv` | the Env row — opens `env.yml` in the editor |
-| `homelab.openPlaybook` | click on the row / context menu — open the `.yml` in the editor |
-| `homelab.refresh` | view title |
+| `playbookRunner.runPlaybook` | inline ▶ / palette (QuickPick chain: env → folder → file) |
+| `playbookRunner.runPlaybookWithOptions` | inline ⚙ — tags, verbosity, check, diff, limit |
+| `playbookRunner.rerunLast` | palette; last invocation kept in `workspaceState` |
+| `playbookRunner.editVault` / `playbookRunner.createVault` | the Vault row + palette |
+| `playbookRunner.openEnv` | the Env row — opens `env.yml` in the editor |
+| `playbookRunner.openPlaybook` | click on the row / context menu — open the `.yml` in the editor |
+| `playbookRunner.refresh` | view title |
 
 Palette entries run the same QuickPick chain the tree bypasses, so both the
 browsable and the type-to-run habits are covered by one code path.
@@ -196,7 +196,7 @@ browsable and the type-to-run habits are covered by one code path.
 ## 8. Refresh
 
 `FileSystemWatcher` on `playbooks/**` and `inventories/**`, plus
-`onDidChangeConfiguration` for `homelab.*`. Adding a playbook file updates the
+`onDidChangeConfiguration` for `playbookRunner.*`. Adding a playbook file updates the
 tree without a reload.
 
 ## 9. Sequence — done
@@ -218,19 +218,19 @@ tree without a reload.
 8. ✅ tree regrouped to environment → service → Playbooks/Vaults:
    `findServices()` added to discovery, `PlaybookGroupNode` replaced by
    `ServiceNode`, the two environment-wide sections moved below the service.
-9. ✅ `env.yml` surfaced: `homelab.envFileName` + `hasEnv`/`envFile` on the
-   group_vars group, an *Env* row per service and `homelab.openEnv`. The
+9. ✅ `env.yml` surfaced: `playbookRunner.envFileName` + `hasEnv`/`envFile` on the
+   group_vars group, an *Env* row per service and `playbookRunner.openEnv`. The
    *Vaults* section became a single *Vault* row that runs edit/create on
    click — one env and one vault per service means neither needs a level of
    its own.
    **Steps 8–9 not run here** — this machine has no `node`, so the new
    discovery tests are unexecuted.
-10. ✅ a playbook row's click opens the file (`homelab.openPlaybook`) instead of
+10. ✅ a playbook row's click opens the file (`playbookRunner.openPlaybook`) instead of
     running it. Running is the inline ▶/⚙, which is a deliberate move rather
     than the one every click makes — the *Env* and *Vault* rows keep acting on
     click because there is nothing else those rows could mean, while a playbook
     row is a file first and an action second.
-11. ✅ service skeletons: `src/scaffold.js` + `homelab.createService`. The
+11. ✅ service skeletons: `src/scaffold.js` + `playbookRunner.createService`. The
     module is the fifth one that never imports `vscode`, for the same reason as
     the other four — it decides which paths get written, so `plan` and `create`
     are separate calls and `test/scaffold.test.js` exercises both. The plan is
@@ -242,7 +242,7 @@ tree without a reload.
     the drift this removes — so the command deliberately takes no environment
     and is not offered on an environment row.
 12. ✅ tags picked from a list instead of typed: `src/tags.js` +
-    `homelab.rolesDir`, the sixth module that never imports `vscode`.
+    `playbookRunner.rolesDir`, the sixth module that never imports `vscode`.
 
     The alternative was `ansible-playbook --list-tags`, which is the
     authoritative answer — it is ansible's own view of the same question, and
@@ -257,7 +257,7 @@ tree without a reload.
     and the task files of the roles it reaches, following `roles:`,
     `- role:`, `import_role`/`include_role` (with `tasks_from`) and
     `import_tasks`/`include_tasks`. Roles resolve beside the playbook first and
-    then against `homelab.rolesDir`, mirroring how ansible looks and what
+    then against `playbookRunner.rolesDir`, mirroring how ansible looks and what
     `ansible.cfg`'s relative `roles_path` means from the cwd every run uses.
 
     **The accepted cost:** it is a line scanner, not a YAML parser. The
@@ -287,7 +287,7 @@ tree without a reload.
 
 13. ✅ the tags are a level of the tree, not only a picker: a playbook row
     expands into one row per tag, `TagNode` in `src/tree.js`, with
-    `homelab.runPlaybookTag` on its inline ▶.
+    `playbookRunner.runPlaybookTag` on its inline ▶.
 
     Nothing new decides anything here. The rows come from the same
     `findPlaybookTags` the checkbox list uses, and the tag reaches `--tags`
@@ -311,6 +311,34 @@ tree without a reload.
       in 43 ms across this repository), so it is not worth a cache; the tags
       are then re-read on every refresh, which is what keeps them true after
       an edit.
+14. ✅ `playbookRunner.serviceEnvironments` limits which environments a skeleton is
+    laid out in. This relaxes step 11's "every environment, always" on
+    request: the default (`[]`) is still every environment, so the drift
+    protection holds unless someone opts out of it in settings, and the
+    command itself still takes no environment and is still not offered on an
+    environment row. The choice lives in a setting rather than a picker so it
+    is made once per workspace, not per service.
+
+    The filtering is `selectEnvironments` in `src/scaffold.js`, so it is
+    tested like the rest of the plan. A listed name is matched against the
+    *discovered* environments only: one with no inventory file is reported
+    (`unknownEnvironments`, shown in the confirmation) and never created,
+    because a `group_vars/` under a directory discovery does not count as an
+    environment is a folder the tree would never show.
+15. ✅ renamed to *Playbook Runner* (`sebgad.playbook-runner`), and the
+    identifier prefix with it: settings, commands and `contextValue`s are
+    `playbookRunner.*`, the view `playbookRunnerExplorer`, the task type
+    `playbook-runner`. *Ansible Runner* was dropped before it was released:
+    it is the name of Ansible's own `ansible-runner` project, so it read as a
+    Red Hat tool rather than one that works with Ansible. "Playbook" and
+    "runner" are both generic words, and the description is where Ansible is
+    named.
+
+    The prefix was a **clean break**, by choice: no `homelab.*` or
+    `homelabTasks.*` key is read and no old command id is kept as an alias,
+    which also removed the 0.1 `homelabTasks.productionPattern` fallback from
+    `src/settings.js`. There is a single user of this extension, so the
+    fallbacks would have been code kept forever for one settings.json edit.
 
 ## 10. Verification
 
@@ -371,7 +399,7 @@ Still to do by hand (needs a running editor, and hosts):
   extension no longer reads it, so those entries are reachable only through
   VS Code's own *Run Task* — and drift there will not show up in the sidebar.
 - The extension shells out to `ansible-playbook` on `PATH`; no virtualenv
-  detection. `homelab.ansiblePlaybookCommand` is the escape hatch.
+  detection. `playbookRunner.ansiblePlaybookCommand` is the escape hatch.
 - The tag list is read by a line scanner, so it is a very good list rather than
   a guaranteed one — see step 12 for why `--list-tags` was not used and what
   *Other…* is there for. If a playbook ever stops being written the way this

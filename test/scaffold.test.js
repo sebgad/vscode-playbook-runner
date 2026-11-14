@@ -17,6 +17,7 @@ const {
   createSkeleton,
   existingServiceNames,
   planService,
+  selectEnvironments,
   validateServiceName,
 } = require("../src/scaffold");
 const { makeFixture, removeFixture, required } = require("./helpers");
@@ -52,7 +53,7 @@ const entry = (plan, relative) =>
 const exists = (relative) => fs.existsSync(path.join(root, relative));
 
 beforeEach(() => {
-  root = makeFixture(FIXTURE, { prefix: "homelab-scaffold-" });
+  root = makeFixture(FIXTURE, { prefix: "playbook-runner-scaffold-" });
 });
 
 afterEach(() => {
@@ -142,9 +143,82 @@ describe("planService", () => {
     assert.equal(plan.entries.length, 1);
   });
 
+  it("is limited to the environments serviceEnvironments names", () => {
+    const plan = planService(root, "uptime-kuma", { serviceEnvironments: ["staging"] });
+    assert.deepEqual(plan.environments, ["staging"]);
+    assert.deepEqual(plan.unknownEnvironments, []);
+    assert.equal(plan.limited, true);
+    assert.deepEqual(
+      plan.entries.map((item) => item.relative.split(path.sep).join("/")),
+      [
+        "playbooks/uptime-kuma",
+        "inventories/staging/group_vars/uptime-kuma",
+        "inventories/staging/group_vars/uptime-kuma/env.yml",
+      ],
+    );
+  });
+
+  it("covers every environment when serviceEnvironments is empty", () => {
+    const plan = planService(root, "uptime-kuma", { serviceEnvironments: [] });
+    assert.deepEqual(plan.environments, ["production", "staging"]);
+    assert.equal(plan.limited, false);
+  });
+
+  it("reports a listed name that is not an environment instead of creating it", () => {
+    // notes/ has no hosts.ini and lab/ does not exist at all.
+    const plan = planService(root, "uptime-kuma", {
+      serviceEnvironments: ["production", "notes", "lab"],
+    });
+    assert.deepEqual(plan.environments, ["production"]);
+    assert.deepEqual(plan.unknownEnvironments, ["notes", "lab"]);
+    assert.equal(
+      plan.entries.some((item) => /notes|lab/.test(item.relative)),
+      false,
+    );
+
+    createSkeleton(plan);
+    assert.equal(exists("inventories/notes/group_vars"), false);
+    assert.equal(exists("inventories/lab"), false);
+  });
+
+  it("plans the playbook folder alone when no listed environment exists", () => {
+    const plan = planService(root, "uptime-kuma", { serviceEnvironments: ["lab"] });
+    assert.deepEqual(plan.environments, []);
+    assert.equal(plan.limited, true);
+    assert.equal(plan.entries.length, 1);
+  });
+
   it("refuses a name that is not a directory name", () => {
     assert.throws(() => planService(root, "../etc"), /service name/i);
     assert.equal(exists("../etc"), false);
+  });
+});
+
+describe("selectEnvironments", () => {
+  const environments = [{ name: "production" }, { name: "staging" }, { name: "lab" }];
+
+  it("keeps discovery order, not the order of the setting", () => {
+    const { selected } = selectEnvironments(environments, ["lab", "production"]);
+    assert.deepEqual(
+      selected.map((item) => item.name),
+      ["production", "lab"],
+    );
+  });
+
+  it("ignores entries that are not a non-empty string", () => {
+    const { selected, unknown, limited } = selectEnvironments(environments, [42, null, "  ", {}]);
+    assert.equal(selected.length, 3);
+    assert.deepEqual(unknown, []);
+    assert.equal(limited, false);
+  });
+
+  it("trims and de-duplicates the names", () => {
+    const { selected, unknown } = selectEnvironments(environments, [" staging ", "staging", "qa", "qa"]);
+    assert.deepEqual(
+      selected.map((item) => item.name),
+      ["staging"],
+    );
+    assert.deepEqual(unknown, ["qa"]);
   });
 });
 
