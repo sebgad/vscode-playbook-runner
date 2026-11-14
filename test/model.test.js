@@ -206,6 +206,20 @@ describe("dashboard model", () => {
         ...fields,
       });
 
+    it("parses setSetting and resetSetting, refusing another target or a non-string key", () => {
+      assert.deepEqual(
+        parseWebviewMessage({ type: "setSetting", key: "playbooksDir", value: ["x"], target: "user", extra: 1 }),
+        { type: "setSetting", key: "playbooksDir", value: ["x"], target: "user" },
+      );
+      assert.deepEqual(parseWebviewMessage({ type: "resetSetting", key: "setupTags", target: "workspace" }), {
+        type: "resetSetting",
+        key: "setupTags",
+        target: "workspace",
+      });
+      assert.equal(parseWebviewMessage({ type: "setSetting", key: "a", value: 1, target: "folder" }), null);
+      assert.equal(parseWebviewMessage({ type: "resetSetting", key: 3, target: "user" }), null);
+    });
+
     it("resolveVaultRequest resolves a service that has the vault the action needs", () => {
       const resolved = required(resolveVaultRequest(model, vault({})), "edit app");
       assert.equal(resolved.service.vaultFile, path.join(root, "inventories/staging/group_vars/app/vault.yml"));

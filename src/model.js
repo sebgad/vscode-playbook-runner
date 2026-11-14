@@ -109,7 +109,9 @@ function buildDashboardModel(folders, readSettingsFor, history) {
  *   | { type: "rekey", folder: string, environment: string }
  *   | { type: "createService", folder: string }
  *   | { type: "rerunLast" }
- *   | { type: "openSettings" }} WebviewMessage
+ *   | { type: "openSettings" }
+ *   | { type: "setSetting", key: string, value: unknown, target: "workspace" | "user" }
+ *   | { type: "resetSetting", key: string, target: "workspace" | "user" }} WebviewMessage
  */
 
 /**
@@ -143,6 +145,17 @@ function parseWebviewMessage(value) {
       return { type: "rerunLast" };
     case "openSettings":
       return { type: "openSettings" };
+    case "setSetting":
+    case "resetSetting": {
+      // The value is validated against the setting's type later, in
+      // settingsEdit.validateSettingValue; here only the envelope.
+      if (typeof raw.key !== "string" || (raw.target !== "workspace" && raw.target !== "user")) {
+        return null;
+      }
+      return raw.type === "setSetting"
+        ? { type: "setSetting", key: raw.key, value: raw.value, target: raw.target }
+        : { type: "resetSetting", key: raw.key, target: raw.target };
+    }
     case "vault":
       return allStrings(raw, ["folder", "environment", "service"]) &&
         (raw.action === "edit" || raw.action === "create")
