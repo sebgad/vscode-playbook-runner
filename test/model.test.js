@@ -16,6 +16,7 @@ const DEFAULTS = require("../src/defaults");
 const {
   buildDashboardModel,
   buildPreview,
+  findOfferedPlaybook,
   parseWebviewMessage,
   resolveOpenRequest,
   resolveRunRequest,
@@ -188,6 +189,15 @@ describe("dashboard model", () => {
       );
       assert.equal(resolveRunRequest(model, request({ environment: "lab" })), null);
       assert.equal(resolveRunRequest(model, request({ folder: "/elsewhere" })), null);
+    });
+  });
+
+  describe("findOfferedPlaybook", () => {
+    it("finds a playbook the model offered in that folder, and nothing else", () => {
+      assert.equal(findOfferedPlaybook(model, root, appFile)?.path, root);
+      assert.equal(findOfferedPlaybook(model, root, "/etc/passwd"), null);
+      assert.equal(findOfferedPlaybook(model, "/elsewhere", appFile), null);
+      assert.equal(findOfferedPlaybook(model, root, `${root}/playbooks/web/../app/app.yml`), null);
     });
   });
 

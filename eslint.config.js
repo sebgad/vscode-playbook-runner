@@ -39,6 +39,17 @@ module.exports = [
     },
   },
   {
+    // The dashboard's page script runs in the webview, not in node.
+    files: ["media/**/*.js"],
+    languageOptions: {
+      sourceType: "script",
+      globals: {
+        ...globals.browser,
+        acquireVsCodeApi: "readonly",
+      },
+    },
+  },
+  {
     // Tests deliberately assert on undefined-ish inputs.
     files: ["test/**/*.js"],
     rules: {

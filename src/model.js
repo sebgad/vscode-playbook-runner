@@ -208,6 +208,20 @@ function offersPlaybook(folder, file) {
 }
 
 /**
+ * The folder holding a playbook the model offered, matched by exact path, or
+ * null -- the check before reading a playbook's outline for the webview.
+ *
+ * @param {DashboardModel} model
+ * @param {string} folderPath
+ * @param {string} playbookFile
+ * @returns {ModelFolder | null}
+ */
+function findOfferedPlaybook(model, folderPath, playbookFile) {
+  const folder = model.folders.find((item) => item.path === folderPath);
+  return folder && offersPlaybook(folder, playbookFile) ? folder : null;
+}
+
+/**
  * The file and line an open message may open, or null. Allowed are a playbook
  * the model offered, an env file it offered, and a file that playbook's own
  * outline reached (a role's task file). Never a vault: those open through
@@ -291,6 +305,7 @@ module.exports = {
   STATUS_FILE_PLACEHOLDER,
   buildDashboardModel,
   buildPreview,
+  findOfferedPlaybook,
   parseWebviewMessage,
   playbookArgv,
   resolveOpenRequest,

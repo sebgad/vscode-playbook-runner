@@ -33,6 +33,7 @@ const {
 const runner = require("./src/runner");
 const pickers = require("./src/pickers");
 const scaffold = require("./src/scaffold");
+const { DashboardPanel, VIEW_TYPE } = require("./src/dashboard");
 const { relativeTime } = require("./src/history");
 const { readSettings } = require("./src/settings");
 const { RunTracker } = require("./src/tracker");
@@ -598,6 +599,12 @@ function activate(context) {
   const refresh = () => {
     updateEnvironmentContext();
     provider.refresh();
+    DashboardPanel.refresh();
+  };
+  /** @type {import("./src/dashboard").DashboardDeps} */
+  const dashboardDeps = {
+    tracker,
+    startRun: (run) => startPlaybookRun(context, tracker, run),
   };
   const watchers = new Watchers(refresh);
   updateEnvironmentContext();
@@ -609,6 +616,7 @@ function activate(context) {
       : undefined;
     status.update();
     provider.refresh();
+    DashboardPanel.refresh();
   });
 
   /**
@@ -634,6 +642,10 @@ function activate(context) {
       runPlaybookCommand(context, tracker, node, false),
     ),
     register("playbookRunner.rerunLast", () => rerunLast(context, tracker)),
+    register("playbookRunner.openDashboard", () => DashboardPanel.show(context, dashboardDeps)),
+    vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
+      deserializeWebviewPanel: async (panel) => DashboardPanel.revive(panel, context, dashboardDeps),
+    }),
     register("playbookRunner.editVault", (node) => vaultCommand(node, "edit")),
     register("playbookRunner.createVault", (node) => vaultCommand(node, "create")),
     register("playbookRunner.rekeyVaults", (node) => rekeyVaultsCommand(node)),

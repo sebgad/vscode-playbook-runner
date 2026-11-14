@@ -30,12 +30,15 @@
     "@eslint/js": "^9.17.0",
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.75.0",
+    "@vscode/codicons": "0.0.46-24",
     "@vscode/vsce": "^3.2.1",
     "eslint": "^9.17.0",
     "globals": "^15.14.0",
     "typescript": "^5.7.2"
   },
-  "activationEvents": [],
+  "activationEvents": [
+    "onWebviewPanel:playbookRunner.dashboard"
+  ],
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
@@ -160,10 +163,21 @@
         "title": "Refresh",
         "category": "Playbook Runner",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "playbookRunner.openDashboard",
+        "title": "Open Dashboard",
+        "category": "Playbook Runner",
+        "icon": "$(dashboard)"
       }
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "playbookRunner.openDashboard",
+          "when": "view == playbookRunnerExplorer",
+          "group": "navigation@0"
+        },
         {
           "command": "playbookRunner.refresh",
           "when": "view == playbookRunnerExplorer",

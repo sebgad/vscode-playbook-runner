@@ -1,0 +1,270 @@
+/**
+ * The dashboard: a webview editor tab beside the sidebar tree.
+ *
+ * Editor surface only. The page in media/dashboard/ renders what it is sent;
+ * what it sends back goes through src/model.js -- parsed field by field, then
+ * matched against what the model offered -- and a run goes through the same
+ * startPlaybookRun as every other run, production modal and all.
+ */
+
+"use strict";
+
+const crypto = require("crypto");
+const path = require("path");
+const vscode = require("vscode");
+
+const { shellQuote } = require("./command");
+const { findEnvironments } = require("./discovery");
+const model = require("./model");
+const { readSettings } = require("./settings");
+const { findPlaybookOutline } = require("./tags");
+
+const VIEW_TYPE = "playbookRunner.dashboard";
+
+/**
+ * @typedef {object} DashboardDeps
+ * @property {import("./tracker").RunTracker} tracker
+ * @property {(run: { folder: vscode.WorkspaceFolder, settings: import("./defaults").Settings, environment: import("./discovery").Environment, playbookFile: string, options: import("./command").RunOptions }) => Promise<void>} startRun
+ */
+
+/** @param {string} fsPath */
+function workspaceFolderAt(fsPath) {
+  return (vscode.workspace.workspaceFolders || []).find((folder) => folder.uri.fsPath === fsPath);
+}
+
+/**
+ * The preview as one line a person could paste: env assignments, then the
+ * command and its arguments, each quoted the way the shell would need.
+ *
+ * @param {string} commandName
+ * @param {string[]} argv
+ * @param {Record<string, string>} env
+ */
+function commandLine(commandName, argv, env) {
+  const assignments = Object.entries(env).map(([key, value]) => `${key}=${shellQuote(value)}`);
+  return [...assignments, commandName, ...argv.map(shellQuote)].join(" ");
+}
+
+class DashboardPanel {
+  /**
+   * @param {vscode.ExtensionContext} context
+   * @param {DashboardDeps} deps
+   */
+  static show(context, deps) {
+    if (DashboardPanel.current) {
+      DashboardPanel.current.panel.reveal();
+      return;
+    }
+    const panel = vscode.window.createWebviewPanel(
+      VIEW_TYPE,
+      "Playbook Runner",
+      vscode.ViewColumn.Active,
+      DashboardPanel.webviewOptions(context),
+    );
+    DashboardPanel.current = new DashboardPanel(panel, context, deps);
+  }
+
+  /**
+   * @param {vscode.WebviewPanel} panel
+   * @param {vscode.ExtensionContext} context
+   * @param {DashboardDeps} deps
+   */
+  static revive(panel, context, deps) {
+    panel.webview.options = DashboardPanel.webviewOptions(context);
+    DashboardPanel.current = new DashboardPanel(panel, context, deps);
+  }
+
+  /** @param {vscode.ExtensionContext} context */
+  static webviewOptions(context) {
+    return {
+      enableScripts: true,
+      retainContextWhenHidden: false,
+      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
+    };
+  }
+
+  /** Re-send the model to an open dashboard, if there is one. */
+  static refresh() {
+    if (DashboardPanel.current) {
+      DashboardPanel.current.update();
+    }
+  }
+
+  /**
+   * @param {vscode.WebviewPanel} panel
+   * @param {vscode.ExtensionContext} context
+   * @param {DashboardDeps} deps
+   */
+  constructor(panel, context, deps) {
+    this.panel = panel;
+    this.context = context;
+    this.deps = deps;
+    /** @type {model.DashboardModel} */
+    this.model = { folders: [] };
+
+    const media = vscode.Uri.joinPath(context.extensionUri, "media");
+    panel.iconPath = vscode.Uri.joinPath(media, "runner.svg");
+    panel.webview.html = this.html(panel.webview, media);
+
+    this.disposables = [
+      panel.onDidDispose(() => this.dispose()),
+      panel.webview.onDidReceiveMessage((message) => this.receive(message)),
+    ];
+  }
+
+  buildModel() {
+    const folders = vscode.workspace.workspaceFolders || [];
+    this.model = model.buildDashboardModel(
+      folders.map((folder) => ({ name: folder.name, path: folder.uri.fsPath })),
+      (folder) => readSettings(workspaceFolderAt(folder.path)),
+      this.deps.tracker.history,
+    );
+    /** @type {Record<string, string[]>} */
+    const setupTags = {};
+    for (const folder of folders) {
+      setupTags[folder.uri.fsPath] = readSettings(folder).setupTags;
+    }
+    return { model: this.model, setupTags };
+  }
+
+  update() {
+    const { model: data, setupTags } = this.buildModel();
+    void this.panel.webview.postMessage({ type: "model", model: data, setupTags, now: Date.now() });
+  }
+
+  /** @param {unknown} value */
+  async receive(value) {
+    const message = model.parseWebviewMessage(value);
+    if (!message) {
+      return;
+    }
+    if (message.type === "ready") {
+      this.update();
+      return;
+    }
+
+    if (message.type === "outline") {
+      const folder = model.findOfferedPlaybook(this.model, message.folder, message.playbook);
+      const workspaceFolder = folder && workspaceFolderAt(folder.path);
+      if (!workspaceFolder) {
+        return;
+      }
+      const outline = findPlaybookOutline(folder.path, message.playbook, readSettings(workspaceFolder));
+      void this.panel.webview.postMessage({
+        type: "outline",
+        folder: folder.path,
+        playbook: message.playbook,
+        outline,
+      });
+      return;
+    }
+
+    if (message.type === "open") {
+      const target = model.resolveOpenRequest(this.model, message, (folderPath, playbookFile) =>
+        findPlaybookOutline(folderPath, playbookFile, readSettings(workspaceFolderAt(folderPath))),
+      );
+      if (!target) {
+        return;
+      }
+      const position = new vscode.Position(target.line - 1, 0);
+      await vscode.window.showTextDocument(vscode.Uri.file(target.file), {
+        viewColumn: vscode.ViewColumn.Beside,
+        selection: new vscode.Range(position, position),
+        preview: true,
+      });
+      return;
+    }
+
+    const resolved = model.resolveRunRequest(this.model, message);
+    const workspaceFolder = resolved && workspaceFolderAt(resolved.folder.path);
+    if (!resolved || !workspaceFolder || (message.type !== "preview" && message.type !== "run")) {
+      return;
+    }
+    const settings = readSettings(workspaceFolder);
+    const root = workspaceFolder.uri.fsPath;
+
+    if (message.type === "preview") {
+      const outline = findPlaybookOutline(root, resolved.playbook.file, settings);
+      const preview = model.buildPreview({
+        root,
+        environment: resolved.environment,
+        playbookFile: resolved.playbook.file,
+        settings,
+        options: message.options,
+        outline,
+        pluginDir: path.join(this.context.extensionPath, "ansible", "strategy"),
+      });
+      void this.panel.webview.postMessage({
+        type: "preview",
+        playbook: resolved.playbook.file,
+        environment: resolved.environment.name,
+        commandLine: commandLine(settings.ansiblePlaybookCommand, preview.argv, preview.env),
+        error: preview.error,
+      });
+      return;
+    }
+
+    // A run: re-find the environment through discovery, so what reaches the
+    // runner is discovery's object and not one rebuilt from the message.
+    const environment = findEnvironments(root, settings).find(
+      (item) => item.name === resolved.environment.name,
+    );
+    if (!environment) {
+      return;
+    }
+    await this.deps.startRun({
+      folder: workspaceFolder,
+      settings,
+      environment,
+      playbookFile: resolved.playbook.file,
+      options: message.options,
+    });
+  }
+
+  /**
+   * @param {vscode.Webview} webview
+   * @param {vscode.Uri} media
+   */
+  html(webview, media) {
+    const nonce = crypto.randomBytes(16).toString("base64");
+    const uri = (/** @type {string[]} */ ...parts) =>
+      webview.asWebviewUri(vscode.Uri.joinPath(media, ...parts)).toString();
+    const csp = [
+      "default-src 'none'",
+      `style-src ${webview.cspSource} 'nonce-${nonce}'`,
+      `font-src ${webview.cspSource}`,
+      `img-src ${webview.cspSource}`,
+      `script-src 'nonce-${nonce}'`,
+    ].join("; ");
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="${csp}">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" nonce="${nonce}" href="${uri("codicons", "codicon.css")}">
+  <link rel="stylesheet" nonce="${nonce}" href="${uri("dashboard", "style.css")}">
+  <title>Playbook Runner</title>
+</head>
+<body>
+  <div id="app" class="app"><p class="loading">Loading…</p></div>
+  <script nonce="${nonce}" src="${uri("dashboard", "main.js")}"></script>
+</body>
+</html>`;
+  }
+
+  dispose() {
+    if (DashboardPanel.current === this) {
+      DashboardPanel.current = null;
+    }
+    for (const disposable of this.disposables) {
+      disposable.dispose();
+    }
+    this.panel.dispose();
+  }
+}
+
+/** @type {DashboardPanel | null} */
+DashboardPanel.current = null;
+
+module.exports = { DashboardPanel, VIEW_TYPE };
