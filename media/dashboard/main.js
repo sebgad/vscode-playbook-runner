@@ -55,6 +55,8 @@
   let setupTags = {};
   /** @type {Map<string, any>} playbook file -> outline, or "loading" */
   const outlines = new Map();
+  /** @type {Map<string, { name: string, sources: string[] }[]>} playbook file -> its tags, run order */
+  const playbookTags = new Map();
   /** @type {{ playbook: string, environment: string, commandLine: string, error: string | null } | null} */
   let preview = null;
   /** @type {ReturnType<typeof setTimeout> | undefined} */
@@ -139,7 +141,8 @@
   function visibleServices(environment) {
     const needle = state.filter.trim().toLowerCase();
     return environment.services.filter(
-      (/** @type {any} */ s) => s.playbooks.length && (!needle || s.name.toLowerCase().includes(needle)),
+      (/** @type {any} */ s) =>
+        (s.playbooks.length || s.vaultFile) && (!needle || s.name.toLowerCase().includes(needle)),
     );
   }
 
@@ -300,6 +303,20 @@
     }, 150);
   }
 
+  /**
+   * Run a playbook of the shown environment straight away -- the extension
+   * checks and confirms it like any other run.
+   *
+   * @param {string} playbook @param {Record<string, unknown>} options
+   */
+  function postRun(playbook, options) {
+    const folder = currentFolder();
+    const environment = currentEnvironment(folder);
+    if (folder && environment) {
+      vscode.postMessage({ type: "run", folder: folder.path, environment: environment.name, playbook, options });
+    }
+  }
+
   /** @param {string} tag */
   function toggleTag(tag) {
     const tags = state.opts.tags.split(",").map((t) => t.trim()).filter(Boolean);
@@ -344,6 +361,43 @@
           )
         : null,
       h("span", { class: "spacer" }),
+      h(
+        "div",
+        { class: "toolbar" },
+        h(
+          "button",
+          {
+            class: "icon-button",
+            title: "Run the last playbook again, with the same options",
+            "data-key": "rerun-last",
+            onclick: () => vscode.postMessage({ type: "rerunLast" }),
+          },
+          icon("debug-rerun"),
+          h("span", { class: "label" }, "Re-run last"),
+        ),
+        h(
+          "button",
+          {
+            class: "icon-button",
+            title: "Lay out a new service: playbooks/<name>/ and group_vars/<name>/",
+            "data-key": "new-service",
+            onclick: () => vscode.postMessage({ type: "createService", folder: folder.path }),
+          },
+          icon("new-folder"),
+          h("span", { class: "label" }, "New service…"),
+        ),
+        h(
+          "button",
+          {
+            class: "icon-button",
+            title: `Rotate the passphrase of every vault in ${environment.name}`,
+            "data-key": "rekey",
+            onclick: () => vscode.postMessage({ type: "rekey", folder: folder.path, environment: environment.name }),
+          },
+          icon("key"),
+          h("span", { class: "label" }, "Rekey vaults"),
+        ),
+      ),
       h(
         "div",
         { class: "segmented", role: "tablist", "aria-label": "Environment" },
@@ -412,7 +466,11 @@
                   },
                   h("span", { class: `dot ${newest ? newest.status : ""}`, title: newest ? newest.status : "never run" }),
                   h("span", { class: "name" }, service.name),
-                  h("span", { class: "when" }, newest ? ago(newest.endedAt || newest.startedAt) : ""),
+                  h(
+                    "span",
+                    { class: "when" },
+                    newest ? ago(newest.endedAt || newest.startedAt) : service.playbooks.length ? "" : "vars",
+                  ),
                 ),
               );
             })
@@ -424,7 +482,7 @@
   /** @param {any} folder @param {any} environment @param {any} service */
   function detailPane(folder, environment, service) {
     if (!service) {
-      return h("section", { class: "detail" }, h("p", { class: "empty" }, "No services with playbooks here."));
+      return h("section", { class: "detail" }, h("p", { class: "empty" }, "No services here."));
     }
     return h(
       "section",
@@ -436,7 +494,9 @@
         h(
           "span",
           { class: "meta" },
-          `${service.playbooks.length} playbook${service.playbooks.length === 1 ? "" : "s"}`,
+          service.playbooks.length
+            ? `${service.playbooks.length} playbook${service.playbooks.length === 1 ? "" : "s"}`
+            : "group_vars only",
           service.envFile
             ? h(
                 "button",
@@ -450,10 +510,31 @@
                 "env.yml",
               )
             : null,
-          service.hasVault ? h("span", { title: "Edit it from the sidebar's Vault row" }, icon("lock"), " vault") : null,
+          service.vaultFile
+            ? h(
+                "button",
+                {
+                  class: "link",
+                  title: service.hasVault ? "ansible-vault edit, in a terminal of its own" : "ansible-vault create",
+                  "data-key": `vault:${service.name}`,
+                  onclick: () =>
+                    vscode.postMessage({
+                      type: "vault",
+                      folder: folder.path,
+                      environment: environment.name,
+                      service: service.name,
+                      action: service.hasVault ? "edit" : "create",
+                    }),
+                },
+                icon(service.hasVault ? "lock" : "add"),
+                service.hasVault ? "Edit vault" : "Create vault",
+              )
+            : null,
         ),
       ),
-      service.playbooks.map((/** @type {any} */ playbook) => card(folder, environment, playbook)),
+      service.playbooks.length
+        ? service.playbooks.map((/** @type {any} */ playbook) => card(folder, environment, playbook))
+        : h("p", { class: "empty" }, `No playbooks under playbooks/${service.name}/ — this service only has variables here.`),
     );
   }
 
@@ -464,6 +545,9 @@
     return h(
       "article",
       { class: `card ${selected ? "selected" : ""}` },
+      h(
+        "div",
+        { class: "card-headline" },
       h(
         "button",
         {
@@ -491,7 +575,55 @@
         ),
         statusView(playbook.latest),
       ),
+        h(
+          "button",
+          {
+            class: "icon-button run-now",
+            title: "Run now, no options",
+            "aria-label": `Run ${playbook.name} now, no options`,
+            "data-key": `run-now:${playbook.file}`,
+            onclick: () => postRun(playbook.file, {}),
+          },
+          icon("play"),
+        ),
+      ),
       open ? cardBody(folder, playbook) : null,
+    );
+  }
+
+  /**
+   * The playbook's tags in run order: ▶ runs only that tag, a click on the
+   * chip adds it to the run bar's --tags.
+   *
+   * @param {any} playbook
+   */
+  function tagsLine(playbook) {
+    const tags = playbookTags.get(playbook.file) || [];
+    if (!tags.length) {
+      return null;
+    }
+    const activeTags = new Set(state.opts.tags.split(",").map((t) => t.trim()).filter(Boolean));
+    return h(
+      "div",
+      { class: "tags-line" },
+      h("span", { class: "tags-label" }, "Tags"),
+      tags.map((tag) =>
+        h(
+          "span",
+          { class: "tag-pair", title: tag.sources.length ? `from ${tag.sources.join(", ")}` : undefined },
+          h(
+            "button",
+            {
+              class: "icon-button",
+              title: `Run only --tags ${tag.name}`,
+              "aria-label": `Run only tag ${tag.name}`,
+              onclick: () => postRun(playbook.file, { tags: tag.name }),
+            },
+            icon("play"),
+          ),
+          tagChip(playbook, tag.name, activeTags),
+        ),
+      ),
     );
   }
 
@@ -506,7 +638,8 @@
       return h(
         "div",
         { class: "card-body" },
-        h("p", { class: "note" }, "No named tasks found by the scanner. Tags and ⚙ in the sidebar still run it."),
+        tagsLine(playbook),
+        h("p", { class: "note" }, "No named tasks found by the scanner. ▶ and the tags above still run it."),
       );
     }
     const selected = state.selected === playbook.file;
@@ -518,6 +651,7 @@
     return h(
       "div",
       { class: "card-body", role: "tree", "aria-label": `Tasks of ${playbook.name}`, "data-nav": `tasks:${playbook.file}` },
+      tagsLine(playbook),
       outline.strategy
         ? h(
             "p",
@@ -853,7 +987,29 @@
     }
     const environment = currentEnvironment(folder);
     if (!environment) {
-      return [h("p", { class: "empty" }, "No Ansible environments found in this folder.")];
+      return [
+        h(
+          "div",
+          { class: "empty-state" },
+          h("h2", null, icon("search"), " No Ansible environments found"),
+          h(
+            "p",
+            null,
+            "Playbook Runner looks for an inventory file (playbookRunner.inventoryFile) in each directory under playbookRunner.inventoriesDir.",
+          ),
+          h(
+            "div",
+            { class: "runbar-line" },
+            h("button", { class: "run", onclick: () => vscode.postMessage({ type: "openSettings" }) }, icon("settings-gear"), "Open Settings"),
+            h(
+              "button",
+              { class: "icon-button", onclick: () => vscode.postMessage({ type: "createService", folder: folder.path }) },
+              icon("new-folder"),
+              h("span", { class: "label" }, "New service…"),
+            ),
+          ),
+        ),
+      ];
     }
     const service = currentService(environment);
     return [
@@ -910,6 +1066,7 @@
       }
     } else if (message.type === "outline") {
       outlines.set(message.playbook, message.outline);
+      playbookTags.set(message.playbook, Array.isArray(message.tags) ? message.tags : []);
       render();
     } else if (message.type === "preview") {
       preview = message;

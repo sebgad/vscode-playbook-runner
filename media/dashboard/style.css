@@ -644,3 +644,66 @@ input[type="text"]::placeholder {
     max-height: 30vh;
   }
 }
+
+/* ── Actions added with the sidebar's removal ───────────────────────── */
+
+.toolbar {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.card-headline {
+  display: flex;
+  align-items: center;
+  padding-right: 8px;
+}
+
+.card-headline .card-head {
+  flex: 1;
+  min-width: 0;
+}
+
+.run-now {
+  color: var(--vscode-button-background);
+}
+
+.tags-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 12px 6px 60px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.tags-label {
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.tag-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.empty-state {
+  padding: 32px;
+  max-width: 640px;
+}
+
+.empty-state h2 {
+  font-size: 1.2em;
+  font-weight: 600;
+  margin: 0 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.empty-state p {
+  color: var(--muted);
+}
