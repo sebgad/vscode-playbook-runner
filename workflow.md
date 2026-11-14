@@ -340,6 +340,59 @@ tree without a reload.
     `src/settings.js`. There is a single user of this extension, so the
     fallbacks would have been code kept forever for one settings.json edit.
 
+16. ✅ a dashboard in the editor area, beside the tree rather than instead of
+    it: `src/dashboard.js`, the page in `media/dashboard/`, and
+    `src/model.js`, which never imports `vscode`.
+
+    The tree stays because it is the quick way in and costs nothing to keep;
+    a webview replacing it would have had to rebuild context menus, keyboard
+    navigation and accessibility by hand. What the tab adds is room: a
+    services × last-run overview, a playbook's tasks, and a run bar.
+
+    The page is a renderer. Everything it posts is parsed field by field by
+    `parseWebviewMessage` (which also drops `extraArgs` -- the page has no way
+    to type raw arguments) and matched by exact path against what the model
+    offered, so a `../` spelling of a real playbook is refused along with a
+    made-up one. A run goes into the same `startPlaybookRun` as every other
+    run. The command line it previews is built by `model.playbookArgv`, the
+    function `runner.runPlaybook` itself calls, so the preview cannot drift
+    from what runs. Colours are theme variables only, and codicons are
+    vendored into `media/codicons/` from `@vscode/codicons`, a dev dependency
+    only so the files can be copied.
+
+17. ✅ task ranges: *from*, *until* and *only* a task, through a strategy
+    plugin shipped in `ansible/strategy/playbook_runner_range.py`.
+
+    `--start-at-task` was the obvious tool and was **not** taken: it skips
+    every task before the match whatever its tags, and adding
+    `--tags podman-user-setup` to keep the setup tasks filters the start task
+    out so it never matches. There is no stop flag at all. A strategy plugin
+    is the one place that sees every task before it runs, so the range is
+    decided there: setup-tagged tasks, fact gathering and includes before the
+    start, everything in the range, only handlers after it.
+
+    The outline the dashboard and pickers show comes from the same line
+    scanner as the tags (step 12), now also walking tasks in run order. It
+    was checked against `ansible-playbook --list-tasks` for every playbook in
+    the repository: nothing it lists is missing. It lists more in one case on
+    purpose -- the tasks of an `include_role`, which run under exactly those
+    names -- and leaves out `rescue:`/`always:` tasks, as `--list-tasks` does.
+    A templated task name is kept as written: ansible matches on the name
+    before templating.
+
+    **The accepted cost:** the plugin overrides a private method of
+    ansible-core's `linear` strategy. An ansible-core upgrade can break it,
+    and the only signal is `test/range-plugin.test.js`, which runs the real
+    ansible-playbook against `localhost,` playbooks of `debug` tasks.
+    Three things keep a broken or bypassed plugin from becoming a whole run
+    nobody asked for: a range is checked against a fresh outline before the
+    run (unknown task, end before start, a playbook that sets `strategy:`);
+    the plugin prints a banner naming the range; and it writes whether each
+    edge matched to a status file the extension reads when the task ends, so
+    an edge that never matched marks the run failed. ansible-core takes its
+    exit code from the last play and gives a strategy no hook after it, which
+    is why the verdict travels by file rather than by exit code.
+
 ## 10. Verification
 
 Automated (`npm test`, node --test):

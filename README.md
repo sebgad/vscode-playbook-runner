@@ -1,7 +1,7 @@
 # Playbook Runner
 
-A VS Code sidebar for running this repository's Ansible playbooks and editing
-its vaults. Environments, playbooks and vaults are **discovered from the
+A VS Code sidebar and dashboard for running this repository's Ansible
+playbooks — whole, by tag, or a range of their tasks — and editing its vaults. Environments, playbooks and vaults are **discovered from the
 filesystem** — no path and no environment name is written down in the
 extension, so adding `inventories/lab/hosts.ini` or a new folder under
 `playbooks/` shows up without touching any code or config.
@@ -44,8 +44,9 @@ Playbook Runner (activity bar)
 * Because variables are per environment and playbooks are not, the same
   service can look different under `production` and `staging`.
 * **Click a playbook** to open the file in the editor. `▶` on the row runs it
-  against that environment, `⚙` asks for tags, verbosity, `--limit`, `--check`
-  and `--diff` first. Tags are a checkbox list of the tags that playbook
+  against that environment, `⚙` asks first: tags, a task range (*From task* /
+  *Until task*, see [Running part of a playbook](#running-part-of-a-playbook)),
+  `--limit`, verbosity, `--check`, `--diff` and `--step`. Tags are a checkbox list of the tags that playbook
   actually has — see [Where the tag list comes from](#where-the-tag-list-comes-from).
 * **Expand a playbook** for those same tags as rows, in the order the run
   reaches them, each showing the role it came from. `▶` on a tag row runs the
@@ -61,9 +62,81 @@ Playbook Runner (activity bar)
   at a time, because the passphrase is per environment.
 * Production rows are red and ask for confirmation before running
   (`playbookRunner.confirmProduction`).
+* A playbook row shows its **last run** in that environment — `✓ 3 min ago`,
+  `✗ 1 d ago`, a spinner while it runs — and the activity bar icon counts the
+  running ones. The **status bar** shows the newest run; click it to run it
+  again.
 * The command palette offers the same thing without the tree: *Playbook Runner: Run
   Playbook* walks environment → service → playbook as QuickPicks, which is the
   flow the old `run-ansible-playbooks.sh` had with `read -p`.
+
+## Dashboard
+
+*Playbook Runner: Open Dashboard* (the `$(dashboard)` button on the view's
+title bar) opens an editor tab with the same environments and services, laid
+out for overview rather than for a narrow side bar:
+
+```
+┌ Playbook Runner ───────────────────────────────── [● production] [● staging] ┐
+│ ⚠ production — runs here ask for confirmation before they start.            │
+├──────────────────┬───────────────────────────────────────────────────────────┤
+│ Filter services  │ authentik   1 playbook  env.yml  vault                    │
+│ ● authentik  3m  │ ▾ authentik.yml                          ✓ 3 min ago      │
+│ ● dns_servers 1d │   CREATE USER …  podman_servers  [podman-user-setup] …    │
+│ ○ immich         │   SETUP  podman/user : Ensure podman_user is defined      │
+│ …                │   FROM   podman/deploy-app : Get podman user UID          │
+│                  │   UNTIL  podman/deploy-app : Set podman user UID fact     │
+├──────────────────┴───────────────────────────────────────────────────────────┤
+│ authentik/authentik.yml  from … until … ✕   tags [   ] limit [   ] ☑ check   │
+│ $ ANSIBLE_STRATEGY=playbook_runner_range … ansible-playbook -i … --check     │
+│                                                       [ ▶ Run on staging ]   │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+* Each service shows its newest run; each playbook expands into its plays and
+  tasks, read the same way the tag list is.
+* **Click a task** to start the range there, click another to end it; hover a
+  row for *only*, *from*, *until* and *open in the editor*. Tags every task of
+  a play shares sit on the play's line. Click a tag to add it to `--tags`.
+* The bottom bar is the run: options, and the **exact command line** the run
+  will get, built by the same code the runner uses. *Run* goes through the
+  same path as `▶` in the tree — production confirmation, last run, history.
+* The page is drawn only in VS Code's theme colours, so it follows light, dark
+  and high-contrast themes.
+
+## Running part of a playbook
+
+`ansible-playbook` can start at a task (`--start-at-task`) but not stop at
+one, and starting skips every earlier task — including the ones that set the
+facts the rest of the play needs (`podman-user-setup`, here). So a range run
+uses a strategy plugin that ships with the extension,
+`ansible/strategy/playbook_runner_range.py`,
+switched on for that one run through `ANSIBLE_STRATEGY` and
+`ANSIBLE_STRATEGY_PLUGINS`. It runs `linear` with a filter in front:
+
+* before the start: fact gathering, `include_*` tasks, and tasks tagged with
+  one of `playbookRunner.setupTags` (default `podman-user-setup`);
+* from the start until the end: everything;
+* after the end: only handlers already notified, so a changed template still
+  restarts its service. Later plays are skipped.
+
+*Only this task* is a range whose start and end are the same task. Task names
+match exactly, as written — `podman/deploy-app : Render manifest` inside a
+role — and a name that appears twice ends at its first occurrence after the
+start.
+
+A range that cannot work is refused before anything runs: a task that is not
+in the playbook (also for *Re-run Last* after a rename), an end before the
+start, or a playbook that sets `strategy:` itself, which would bypass the
+plugin. If an edge still never matched during a run, the run counts as failed
+and says which one.
+
+The plugin overrides part of ansible-core's `linear` strategy, so an
+ansible-core upgrade can break it; `npm test` runs it against the installed
+ansible-core on throwaway `localhost` playbooks and fails if it does. It is
+known to work with ansible-core 2.22.
+
+`--step` is a run option too: ansible asks before each task in the terminal.
 
 ## Where the tag list comes from
 
@@ -171,6 +244,10 @@ ansible-vault edit inventories/production/group_vars/<group>/vault.yml
 Both run with the workspace folder as the working directory, because
 `ansible.cfg` is only read from the cwd and its `roles_path` is relative.
 
+A task-range run adds environment variables to its task — the range plugin's
+`ANSIBLE_STRATEGY*` and `PLAYBOOK_RUNNER_*` — never anything to the command
+string. Every other run is unchanged.
+
 Arguments are handed to the shell strongly quoted, so a path is a path and
 never syntax. The vault terminal runs `$shell -c <command>` as its process
 rather than being an interactive shell that gets typed into: it ends when the
@@ -249,6 +326,7 @@ afterwards. For VS Code Insiders or the Flatpak build, use
 | `playbookRunner.confirmProduction` | `true` | Ask before running against a production environment. |
 | `playbookRunner.ansiblePlaybookCommand` ⁽ᵐ⁾ | `ansible-playbook` | Point at a virtualenv if ansible is not on `PATH`; a wrapper such as `uv run ansible-playbook` works too. |
 | `playbookRunner.ansibleVaultCommand` ⁽ᵐ⁾ | `ansible-vault` | |
+| `playbookRunner.setupTags` | `["podman-user-setup"]` | Tags whose tasks still run before the start of a task range, because later tasks need the facts they set. Empty makes *From task* behave like `--start-at-task`. |
 | `playbookRunner.serviceEnvironments` | `[]` | Environments *Create Service Skeleton…* lays a service out in. Empty means every environment; a name that is not an environment is skipped, never created. |
 
 ⁽ᵐ⁾ `machine` scope: user settings only, not settable by a workspace.

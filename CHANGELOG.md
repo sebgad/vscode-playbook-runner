@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+* **Dashboard:** *Open Dashboard* opens an editor tab with environments,
+  services and their last run, playbooks that expand into plays and tasks, and
+  a run bar showing the exact command line before *Run*.
+* **Task ranges:** run a playbook *from* a task, *until* a task, or *only* one
+  task — from the dashboard or from ⚙ *Run Options*. A strategy plugin shipped
+  with the extension does it; tasks tagged with the new
+  `playbookRunner.setupTags` (default `podman-user-setup`) still run before
+  the start. A range whose task is not in the playbook, or whose end comes
+  before its start, is refused before anything runs.
+* `--step` is a run option.
+* Playbook rows show their last run (`✓ 3 min ago`, spinner while running),
+  the activity bar icon counts running playbooks, and a status bar item shows
+  the newest run and re-runs it on click.
+* An empty tree shows a welcome view with *Open Settings* instead of a
+  "nothing found" row.
+* *Run Options* is grouped into *Scope* and *Output* and stays open when focus
+  moves elsewhere.
+* Roles referenced by a path relative to the playbook
+  (`../../roles/unattended-upgrades`) are now followed, so their tags appear
+  in the tag list.
+
 * Renamed from *Homelab* (`homelab-tasks`) to *Playbook Runner*
   (`playbook-runner`): the activity bar, the command palette category, the task
   source and the prefix of every notification. The extension ID is now
