@@ -17,8 +17,10 @@ const { after, before, describe, it } = require("node:test");
 
 const {
   buildTagChoices,
+  findPlaybookOutline,
   findPlaybookTags,
   formatTagList,
+  outlineTaskNames,
   parseTagList,
 } = require("../src/tags");
 const { makeFixture, removeFixture, required } = require("./helpers");
@@ -306,5 +308,184 @@ describe("buildTagChoices", () => {
     assert.equal(extra.known, false);
     assert.equal(extra.picked, true);
     assert.equal(choices.length, 3);
+  });
+});
+
+/** @type {(string | [string, string])[]} */
+const OUTLINE_FIXTURE = [
+  [
+    "playbooks/app/app.yml",
+    `---
+- name: Deploy the app
+  hosts: podman_servers
+  tags: [p]
+  pre_tasks:
+    - name: pre task
+      ansible.builtin.debug: msg=pre
+  roles:
+    - role: podman/deploy-app
+      tags: deploy-app
+  tasks:
+    - name: top task
+      ansible.builtin.debug: msg=a
+    - name: Pull in the setup
+      ansible.builtin.import_role:
+        name: podman/user
+        tasks_from: setup
+    - name: last task
+      ansible.builtin.debug: msg=b
+    - name: "Install {{ pkg }}"
+      ansible.builtin.debug: msg=c
+    - ansible.builtin.debug: msg=unnamed
+    - name: A block
+      tags: [b]
+      block:
+        - name: in block
+          ansible.builtin.debug: msg=d
+      rescue:
+        - name: in rescue
+          ansible.builtin.debug: msg=e
+    - ansible.builtin.import_role:
+        name: ../../roles/byPath
+  handlers:
+    - name: a handler
+      ansible.builtin.debug: msg=h
+
+- import_playbook: other.yml
+`,
+  ],
+  [
+    "playbooks/app/other.yml",
+    `- name: Second play
+  hosts: nfs_servers
+  strategy: free
+  tasks:
+    - name: other task
+      ansible.builtin.debug: msg=o
+`,
+  ],
+  [
+    "roles/podman/deploy-app/tasks/main.yml",
+    `---
+# a comment line
+- name: inner task
+  ansible.builtin.debug: msg=x
+- name: Load more
+  ansible.builtin.import_tasks: more.yaml
+`,
+  ],
+  ["roles/podman/deploy-app/tasks/more.yaml", "- name: from more\n  ansible.builtin.debug: msg=m\n"],
+  ["roles/podman/user/tasks/setup.yml", "- name: setup task\n  ansible.builtin.debug: msg=s\n"],
+  ["roles/byPath/tasks/main.yml", "- name: by path\n  ansible.builtin.debug: msg=p\n"],
+  ["roles/podman/user/tasks/main.yml", "- name: not reached\n  ansible.builtin.debug: msg=n\n"],
+  ["playbooks/loop/loop.yml", "- hosts: all\n  tasks:\n    - import_tasks: a.yml\n"],
+  ["playbooks/loop/a.yml", "- name: in a\n  debug: msg=a\n- import_tasks: b.yml\n"],
+  ["playbooks/loop/b.yml", "- name: in b\n  debug: msg=b\n- import_tasks: a.yml\n"],
+];
+
+describe("findPlaybookOutline", () => {
+  /** @type {string} */
+  let root;
+  /** @type {import("../src/tags").PlaybookOutline} */
+  let outline;
+
+  before(() => {
+    root = makeFixture(OUTLINE_FIXTURE, { prefix: "playbook-runner-outline-" });
+    outline = findPlaybookOutline(root, path.join(root, "playbooks/app/app.yml"));
+  });
+
+  after(() => removeFixture(root));
+
+  /** @param {string} name */
+  const task = (name) =>
+    required(
+      outline.plays.flatMap((play) => play.tasks).find((item) => item.name === name),
+      `task ${name}`,
+    );
+
+  it("lists the tasks in run order, with role tasks carrying the role prefix", () => {
+    assert.deepEqual(outlineTaskNames(outline), [
+      "pre task",
+      "podman/deploy-app : inner task",
+      "podman/deploy-app : from more",
+      "top task",
+      "podman/user : setup task",
+      "last task",
+      "Install {{ pkg }}",
+      "in block",
+      "../../roles/byPath : by path",
+      "other task",
+    ]);
+  });
+
+  it("keeps the bare name and the role apart", () => {
+    const inner = task("podman/deploy-app : inner task");
+    assert.equal(inner.bareName, "inner task");
+    assert.equal(inner.role, "podman/deploy-app");
+    assert.equal(task("top task").role, null);
+  });
+
+  it("keeps the role prefix through import_tasks inside a role, and reads .yaml", () => {
+    assert.equal(task("podman/deploy-app : from more").role, "podman/deploy-app");
+  });
+
+  it("follows import_playbook into extra plays, keeping name and hosts", () => {
+    assert.deepEqual(
+      outline.plays.map((play) => [play.name, play.hosts]),
+      [
+        ["Deploy the app", "podman_servers"],
+        ["Second play", "nfs_servers"],
+      ],
+    );
+  });
+
+  it("inherits play, role-reference and block tags", () => {
+    assert.deepEqual(task("podman/deploy-app : inner task").tags, ["p", "deploy-app"]);
+    assert.deepEqual(task("in block").tags, ["p", "b"]);
+    assert.deepEqual(task("top task").tags, ["p"]);
+  });
+
+  it("skips unnamed tasks and counts them, but keeps a templated name raw -- that is what ansible matches", () => {
+    assert.equal(outline.skipped, 1);
+    assert.equal(task("Install {{ pkg }}").bareName, "Install {{ pkg }}");
+  });
+
+  it("finds a role referenced by a path relative to the playbook, named as written", () => {
+    assert.equal(task("../../roles/byPath : by path").role, "../../roles/byPath");
+  });
+
+  it("does not list handlers, nor rescue and always tasks -- as --list-tasks does not", () => {
+    assert.ok(!outlineTaskNames(outline).includes("a handler"));
+    assert.ok(!outlineTaskNames(outline).includes("in rescue"));
+  });
+
+  it("reports a play-level strategy", () => {
+    assert.equal(outline.strategy, "free");
+    const plain = findPlaybookOutline(root, path.join(root, "playbooks/app/other.yml"));
+    assert.equal(plain.strategy, "free");
+    const loop = findPlaybookOutline(root, path.join(root, "playbooks/loop/loop.yml"));
+    assert.equal(loop.strategy, null);
+  });
+
+  it("points each task at its file and its 1-based '- name:' line", () => {
+    const top = task("top task");
+    assert.equal(top.file, path.join(root, "playbooks/app/app.yml"));
+    assert.equal(top.line, 12);
+    const inner = task("podman/deploy-app : inner task");
+    assert.equal(inner.file, path.join(root, "roles/podman/deploy-app/tasks/main.yml"));
+    assert.equal(inner.line, 3);
+  });
+
+  it("terminates on an import cycle", () => {
+    const loop = findPlaybookOutline(root, path.join(root, "playbooks/loop/loop.yml"));
+    assert.deepEqual(outlineTaskNames(loop), ["in a", "in b"]);
+  });
+
+  it("returns an empty outline for a playbook that is not there", () => {
+    assert.deepEqual(findPlaybookOutline(root, path.join(root, "playbooks/nope.yml")), {
+      plays: [],
+      strategy: null,
+      skipped: 0,
+    });
   });
 });

@@ -281,7 +281,7 @@ function resolveFile(candidates) {
  * the configured roles directory -- ansible.cfg's roles_path, which is relative
  * to the workspace folder because that is the cwd every run uses.
  *
- * @param {ScanState} state
+ * @param {{ root: string, settings: import("./defaults").Settings }} state
  * @param {string} name
  * @param {string} playbookDir
  * @returns {string | null}
@@ -290,6 +290,9 @@ function resolveRole(state, name, playbookDir) {
   const candidates = [
     path.join(playbookDir, state.settings.rolesDir, name),
     path.join(state.root, state.settings.rolesDir, name),
+    // A role named by its path, `../../roles/unattended-upgrades`, which
+    // ansible accepts relative to the playbook.
+    path.resolve(playbookDir, name),
   ];
   return candidates.find((dir) => isDirectory(dir)) ?? null;
 }
@@ -310,7 +313,7 @@ function readLines(file) {
  * How an imported file is named beside a tag: the same shape the tree and the
  * task labels use, `podman_servers/acme.yml` rather than the whole path.
  *
- * @param {ScanState} state
+ * @param {{ root: string, settings: import("./defaults").Settings }} state
  * @param {string} file
  * @returns {string}
  */
@@ -535,6 +538,433 @@ function findPlaybookTags(root, playbookFile, settings) {
 }
 
 /**
+ * @typedef {object} OutlineTask
+ * @property {string} name      ansible's get_name(): "podman/deploy-app : Render manifest" inside a role
+ * @property {string} bareName  the `name:` as written
+ * @property {string | null} role  the role as referenced, e.g. "podman/deploy-app"
+ * @property {string[]} tags    its own tags plus the play's, the role reference's and the block's
+ * @property {string} file
+ * @property {number} line      1-based, the task's first line
+ */
+
+/**
+ * @typedef {object} OutlinePlay
+ * @property {string} name
+ * @property {string} hosts
+ * @property {OutlineTask[]} tasks
+ */
+
+/**
+ * @typedef {object} PlaybookOutline
+ * @property {OutlinePlay[]} plays
+ * @property {string | null} strategy  the first play-level `strategy:`, which would bypass a range run
+ * @property {number} skipped          tasks left out because they have no name
+ */
+
+/**
+ * @typedef {object} OutlineState
+ * @property {string} root
+ * @property {import("./defaults").Settings} settings
+ * @property {OutlinePlay[]} plays
+ * @property {string | null} strategy
+ * @property {number} skipped
+ * @property {number} reads   files opened so far, against MAX_FILES
+ * @property {Set<string>} stack  real paths of the files being walked right now
+ */
+
+/**
+ * @typedef {object} TaskContext
+ * @property {string} file
+ * @property {string} playbookDir
+ * @property {string | null} role
+ * @property {string | null} roleDir
+ * @property {string[]} tags  inherited from above
+ */
+
+/** @param {string} line */
+function isBlank(line) {
+  return !stripComment(line).trim();
+}
+
+/**
+ * The items of the block sequence that starts at the first non-blank line of
+ * `[start, end)`, as line ranges. Nothing when that line is not an item.
+ *
+ * @param {string[]} lines
+ * @param {number} start
+ * @param {number} end  exclusive
+ * @returns {{ start: number, end: number }[]}
+ */
+function sequenceItems(lines, start, end) {
+  /** @type {{ start: number, end: number }[]} */
+  const items = [];
+  let dashColumn = -1;
+  for (let i = start; i < end; i += 1) {
+    const line = lines[i] ?? "";
+    if (isBlank(line)) {
+      continue;
+    }
+    const indent = indentOf(line);
+    const isDash = /^-(\s|$)/.test(line.trimStart());
+    if (dashColumn < 0) {
+      if (!isDash) {
+        if (line.trim() === "---") {
+          continue;
+        }
+        return items;
+      }
+      dashColumn = indent;
+    }
+    if (indent < dashColumn || (indent === dashColumn && !isDash)) {
+      break;
+    }
+    if (indent === dashColumn) {
+      const last = items[items.length - 1];
+      if (last) {
+        last.end = i;
+      }
+      items.push({ start: i, end });
+    }
+  }
+  const last = items[items.length - 1];
+  if (last && last.end > end) {
+    last.end = end;
+  }
+  return items;
+}
+
+/**
+ * @typedef {object} Field
+ * @property {number} line   the key's line
+ * @property {number} end    exclusive end of its block
+ * @property {number} indent
+ * @property {string} value
+ */
+
+/**
+ * The top-level keys of one sequence item, a collection prefix dropped
+ * (`ansible.builtin.import_role` is `import_role`). A scalar item has none and
+ * comes back with its text as `scalar`.
+ *
+ * @param {string[]} lines
+ * @param {{ start: number, end: number }} item
+ * @returns {{ fields: Map<string, Field>, scalar: string | null }}
+ */
+function fieldsOf(lines, item) {
+  /** @type {Map<string, Field>} */
+  const fields = new Map();
+  const first = readLine(lines[item.start] ?? "");
+  if (!first.key) {
+    return { fields, scalar: first.body.trim() || null };
+  }
+  const keyIndent = first.indent;
+  /** @type {Field | null} */
+  let current = null;
+  /** @param {string} key @param {Field} field */
+  const add = (key, field) => {
+    const short = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
+    if (!fields.has(short)) {
+      fields.set(short, field);
+    }
+  };
+  current = { line: item.start, end: item.end, indent: keyIndent, value: first.value };
+  add(first.key, current);
+  for (let i = item.start + 1; i < item.end; i += 1) {
+    const line = lines[i] ?? "";
+    if (isBlank(line) || indentOf(line) !== keyIndent) {
+      continue;
+    }
+    const entry = readLine(line);
+    if (!entry.key || entry.isItem) {
+      continue;
+    }
+    current.end = i;
+    current = { line: i, end: item.end, indent: keyIndent, value: entry.value };
+    add(entry.key, current);
+  }
+  return { fields, scalar: null };
+}
+
+/**
+ * @param {string[]} lines
+ * @param {Field | undefined} field
+ * @returns {string[]}
+ */
+function fieldTags(lines, field) {
+  return field ? tagsAt(field, lines, field.line) : [];
+}
+
+/**
+ * @param {string[]} inherited
+ * @param {string[]} own
+ * @returns {string[]}
+ */
+function mergeTags(inherited, own) {
+  return [...new Set([...inherited, ...own])];
+}
+
+/**
+ * Read a file for the outline, or null when it is unreadable, already being
+ * walked (an import cycle) or past the file budget.
+ *
+ * @param {OutlineState} state
+ * @param {string} file
+ * @param {(lines: string[]) => void} walk
+ */
+function withFile(state, file, walk) {
+  const real = realPathOrNull(file);
+  if (real === null || state.stack.has(real) || state.reads >= MAX_FILES) {
+    return;
+  }
+  const lines = readLines(file);
+  if (!lines) {
+    return;
+  }
+  state.reads += 1;
+  state.stack.add(real);
+  try {
+    walk(lines);
+  } finally {
+    state.stack.delete(real);
+  }
+}
+
+/**
+ * The tasks of a role's task file, appended to `out`.
+ *
+ * @param {OutlineState} state
+ * @param {OutlineTask[]} out
+ * @param {string} name
+ * @param {string} from  tasks file without extension, "main" by default
+ * @param {TaskContext} context
+ * @param {string[]} tags
+ */
+function outlineRole(state, out, name, from, context, tags) {
+  const roleDir = resolveRole(state, name, context.playbookDir);
+  const file = roleDir ? resolveFile([path.join(roleDir, "tasks", from)]) : null;
+  if (!roleDir || !file) {
+    return;
+  }
+  withFile(state, file, (lines) =>
+    outlineTasks(state, out, lines, 0, lines.length, {
+      file,
+      playbookDir: context.playbookDir,
+      role: name,
+      roleDir,
+      tags,
+    }),
+  );
+}
+
+/**
+ * Walk a task list in run order: a role or a task file is descended into where
+ * it is referenced, which is where its tasks run.
+ *
+ * @param {OutlineState} state
+ * @param {OutlineTask[]} out
+ * @param {string[]} lines
+ * @param {number} start
+ * @param {number} end
+ * @param {TaskContext} context
+ */
+function outlineTasks(state, out, lines, start, end, context) {
+  for (const item of sequenceItems(lines, start, end)) {
+    const { fields } = fieldsOf(lines, item);
+    const tags = mergeTags(context.tags, fieldTags(lines, fields.get("tags")));
+    const nameField = fields.get("name");
+    const bareName = nameField ? unquote(nameField.value) : "";
+
+    // Only the block's own tasks: `rescue:` and `always:` run on failure or as
+    // cleanup, which makes them poor places to start or stop a run, and
+    // `--list-tasks` leaves them out as well.
+    const block = fields.get("block");
+    if (block) {
+      outlineTasks(state, out, lines, block.line + 1, block.end, { ...context, tags });
+      continue;
+    }
+
+    const roleField = fields.get("import_role") || fields.get("include_role");
+    if (roleField) {
+      const block = lines.slice(roleField.line + 1, roleField.end);
+      const role = inlineField(roleField.value, "name") || fieldIn(block, "name");
+      if (fields.has("include_role")) {
+        pushTask(state, out, bareName, item, context, tags);
+      }
+      if (role) {
+        outlineRole(state, out, role, fieldIn(block, "tasks_from") || "main", context, tags);
+      }
+      continue;
+    }
+
+    const tasksField = fields.get("import_tasks") || fields.get("include_tasks");
+    if (tasksField) {
+      if (fields.has("include_tasks")) {
+        pushTask(state, out, bareName, item, context, tags);
+      }
+      const block = lines.slice(tasksField.line + 1, tasksField.end);
+      const target = inlineField(tasksField.value, "file") || fieldIn(block, "file");
+      if (target) {
+        const bases = context.roleDir
+          ? [path.join(context.roleDir, "tasks"), context.roleDir, context.playbookDir]
+          : [context.playbookDir, state.root];
+        const file = resolveFile(bases.map((base) => path.resolve(base, target)));
+        if (file) {
+          withFile(state, file, (included) =>
+            outlineTasks(state, out, included, 0, included.length, { ...context, file, tags }),
+          );
+        }
+      }
+      continue;
+    }
+
+    pushTask(state, out, bareName, item, context, tags);
+  }
+}
+
+/**
+ * @param {OutlineState} state
+ * @param {OutlineTask[]} out
+ * @param {string} bareName
+ * @param {{ start: number }} item
+ * @param {TaskContext} context
+ * @param {string[]} tags
+ */
+function pushTask(state, out, bareName, item, context, tags) {
+  // A templated name stays, raw: ansible matches a task by its name as
+  // written, before templating, both for --start-at-task and in the iterator
+  // the range plugin reads.
+  if (!bareName) {
+    state.skipped += 1;
+    return;
+  }
+  out.push({
+    name: context.role ? `${context.role} : ${bareName}` : bareName,
+    bareName,
+    role: context.role,
+    tags,
+    file: context.file,
+    line: item.start + 1,
+  });
+}
+
+/**
+ * The plays of one playbook file, `import_playbook` followed in place.
+ *
+ * @param {OutlineState} state
+ * @param {string} file
+ */
+function outlinePlaybook(state, file) {
+  withFile(state, file, (lines) => {
+    const playbookDir = path.dirname(file);
+    for (const item of sequenceItems(lines, 0, lines.length)) {
+      const { fields } = fieldsOf(lines, item);
+
+      const imported = fields.get("import_playbook");
+      if (imported) {
+        const target = inlineField(imported.value, "file");
+        const playbook = target
+          ? resolveFile([path.resolve(playbookDir, target), path.resolve(state.root, target)])
+          : null;
+        if (playbook) {
+          outlinePlaybook(state, playbook);
+        }
+        continue;
+      }
+
+      const hosts = fields.get("hosts");
+      if (!hosts) {
+        continue;
+      }
+      const strategy = fields.get("strategy");
+      if (strategy && state.strategy === null) {
+        state.strategy = unquote(strategy.value) || "?";
+      }
+
+      const nameField = fields.get("name");
+      const hostsText = unquote(hosts.value);
+      /** @type {OutlinePlay} */
+      const play = {
+        name: (nameField && unquote(nameField.value)) || hostsText,
+        hosts: hostsText,
+        tasks: [],
+      };
+      const playTags = fieldTags(lines, fields.get("tags"));
+      /** @type {TaskContext} */
+      const context = { file, playbookDir, role: null, roleDir: null, tags: playTags };
+
+      // The order ansible runs a play's sections in.
+      for (const section of ["pre_tasks", "roles", "tasks", "post_tasks"]) {
+        const field = fields.get(section);
+        if (!field) {
+          continue;
+        }
+        if (section !== "roles") {
+          outlineTasks(state, play.tasks, lines, field.line + 1, field.end, context);
+          continue;
+        }
+        const refs = field.value.startsWith("[")
+          ? flowSequence(field.value, lines, field.line + 1).map((name) => ({
+              name: unquote(name),
+              tags: /** @type {string[]} */ ([]),
+            }))
+          : sequenceItems(lines, field.line + 1, field.end).map((ref) => {
+              const parsed = fieldsOf(lines, ref);
+              const roleField = parsed.fields.get("role") || parsed.fields.get("name");
+              return {
+                name: parsed.scalar !== null ? unquote(parsed.scalar) : roleField ? unquote(roleField.value) : "",
+                tags: fieldTags(lines, parsed.fields.get("tags")),
+              };
+            });
+        for (const ref of refs) {
+          if (ref.name && !/[{}:]/.test(ref.name)) {
+            outlineRole(state, play.tasks, ref.name, "main", context, mergeTags(playTags, ref.tags));
+          }
+        }
+      }
+      state.plays.push(play);
+    }
+  });
+}
+
+/**
+ * The plays and tasks of a playbook in the order they run, with the names
+ * ansible itself gives them -- the names `--start-at-task` and the range
+ * plugin match on. Read by the same line scanner as the tags, so the same
+ * limits apply: a task generated at runtime, or a role reached through a
+ * templated name, is not here.
+ *
+ * @param {string} root workspace folder path
+ * @param {string} playbookFile absolute path
+ * @param {Partial<import("./defaults").Settings>} [settings]
+ * @returns {PlaybookOutline}
+ */
+function findPlaybookOutline(root, playbookFile, settings) {
+  /** @type {OutlineState} */
+  const state = {
+    root,
+    settings: { ...DEFAULTS, ...(settings || {}) },
+    plays: [],
+    strategy: null,
+    skipped: 0,
+    reads: 0,
+    stack: new Set(),
+  };
+  outlinePlaybook(state, playbookFile);
+  return { plays: state.plays, strategy: state.strategy, skipped: state.skipped };
+}
+
+/**
+ * Every task name of an outline, in run order, duplicates kept -- a role used
+ * by two plays is two runs of the same names.
+ *
+ * @param {PlaybookOutline} outline
+ * @returns {string[]}
+ */
+function outlineTaskNames(outline) {
+  return outline.plays.flatMap((play) => play.tasks.map((task) => task.name));
+}
+
+/**
  * A `--tags` string as a list. Also the guard on what comes back from workspace
  * state: the remembered tags of the last run reach a command line.
  *
@@ -593,7 +1023,9 @@ function buildTagChoices(available, selected) {
 module.exports = {
   MAX_FILES,
   buildTagChoices,
+  findPlaybookOutline,
   findPlaybookTags,
   formatTagList,
+  outlineTaskNames,
   parseTagList,
 };
