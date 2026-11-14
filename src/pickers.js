@@ -226,6 +226,7 @@ async function pickTags(available, previous) {
     title: "Ansible tags",
     placeHolder: "Tick the tags to pass to --tags",
     canPickMany: true,
+    ignoreFocusOut: true,
   });
   if (!chosen) {
     return undefined;
@@ -243,15 +244,81 @@ async function pickTags(available, previous) {
 }
 
 /**
- * Tags / verbosity / --check / --diff / --limit, in one multi-select followed
- * by the inputs for whatever was ticked.
+ * One task of a playbook, picked from its outline: a separator per play, the
+ * task's tags beside it, and a name that occurs more than once said so --
+ * the range plugin takes its first occurrence at or after the start.
+ *
+ * @param {import("./tags").PlaybookOutline} outline
+ * @param {string} title
+ * @param {string} [previousName]
+ * @returns {Promise<string | undefined>}
+ */
+async function pickTask(outline, title, previousName) {
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  for (const play of outline.plays) {
+    for (const task of play.tasks) {
+      counts.set(task.name, (counts.get(task.name) || 0) + 1);
+    }
+  }
+
+  /** @typedef {vscode.QuickPickItem & { name?: string }} TaskItem */
+  /** @type {TaskItem[]} */
+  const items = [];
+  for (const play of outline.plays) {
+    if (!play.tasks.length) {
+      continue;
+    }
+    items.push({ label: `${play.name} — ${play.hosts}`, kind: vscode.QuickPickItemKind.Separator });
+    for (const task of play.tasks) {
+      const count = counts.get(task.name) || 0;
+      items.push({
+        label: task.name,
+        description: [
+          task.tags.join(", "),
+          count > 1 ? `(appears ${count}×)` : "",
+          task.name === previousName ? "· last time" : "",
+        ]
+          .filter(Boolean)
+          .join("  "),
+        name: task.name,
+      });
+    }
+  }
+
+  const chosen = await vscode.window.showQuickPick(items, {
+    title,
+    placeHolder: "Type to filter the playbook's tasks",
+    matchOnDescription: true,
+    ignoreFocusOut: true,
+  });
+  return chosen ? chosen.name : undefined;
+}
+
+/**
+ * Tags, task range, limit / verbosity, --check, --diff, --step, in one
+ * multi-select followed by the inputs for whatever was ticked.
  *
  * @param {import("./command").RunOptions} [previous]
  * @param {import("./tags").PlaybookTag[]} [availableTags] as read from the playbook
+ * @param {import("./tags").PlaybookOutline} [outline] as read from the playbook
  * @returns {Promise<import("./command").RunOptions | undefined>}
  */
-async function pickRunOptions(previous = {}, availableTags = []) {
+async function pickRunOptions(previous = {}, availableTags = [], outline) {
+  const taskCount = outline ? outline.plays.reduce((sum, play) => sum + play.tasks.length, 0) : 0;
+  const rangeBlocked = outline && outline.strategy
+    ? `task ranges unavailable: playbook sets strategy: ${outline.strategy}`
+    : !taskCount
+      ? "task ranges unavailable: no named tasks found"
+      : null;
+
+  /** @typedef {vscode.QuickPickItem & { key?: string }} OptionItem */
+  /** @type {OptionItem[]} */
   const items = [
+    {
+      label: rangeBlocked ? `Scope — ${rangeBlocked}` : "Scope",
+      kind: vscode.QuickPickItemKind.Separator,
+    },
     {
       label: "$(tag) Tags",
       detail: previous.tags
@@ -262,17 +329,41 @@ async function pickRunOptions(previous = {}, availableTags = []) {
       key: "tags",
       picked: Boolean(previous.tags),
     },
-    {
-      label: "$(output) Verbosity",
-      detail: previous.verbosity ? `currently: -${"v".repeat(previous.verbosity)}` : "-v .. -vvvv",
-      key: "verbosity",
-      picked: Boolean(previous.verbosity),
-    },
+  ];
+  if (!rangeBlocked) {
+    items.push(
+      {
+        label: "$(debug-start) From task",
+        detail: previous.fromTask
+          ? `currently: ${previous.fromTask}`
+          : `start at a task · ${taskCount} found · setup tags still run before it`,
+        key: "fromTask",
+        picked: Boolean(previous.fromTask),
+      },
+      {
+        label: "$(debug-stop) Until task",
+        detail: previous.untilTask
+          ? `currently: ${previous.untilTask}`
+          : "stop after a task · pick the same as From for a single task",
+        key: "untilTask",
+        picked: Boolean(previous.untilTask),
+      },
+    );
+  }
+  items.push(
+    { label: "", kind: vscode.QuickPickItemKind.Separator },
     {
       label: "$(target) Limit",
       detail: previous.limit ? `currently: ${previous.limit}` : "--limit",
       key: "limit",
       picked: Boolean(previous.limit),
+    },
+    { label: "Output", kind: vscode.QuickPickItemKind.Separator },
+    {
+      label: "$(output) Verbosity",
+      detail: previous.verbosity ? `currently: -${"v".repeat(previous.verbosity)}` : "-v .. -vvvv",
+      key: "verbosity",
+      picked: Boolean(previous.verbosity),
     },
     {
       label: "$(beaker) Check (dry run)",
@@ -281,11 +372,18 @@ async function pickRunOptions(previous = {}, availableTags = []) {
       picked: Boolean(previous.check),
     },
     { label: "$(diff) Diff", detail: "--diff", key: "diff", picked: Boolean(previous.diff) },
-  ];
+    {
+      label: "$(debug-step-over) Step",
+      detail: "--step · confirm every task in the terminal",
+      key: "step",
+      picked: Boolean(previous.step),
+    },
+  );
 
   const chosen = await vscode.window.showQuickPick(items, {
     title: "Run options",
     canPickMany: true,
+    ignoreFocusOut: true,
   });
   if (!chosen) {
     return undefined;
@@ -293,7 +391,7 @@ async function pickRunOptions(previous = {}, availableTags = []) {
 
   const keys = new Set(chosen.map((item) => item.key));
   /** @type {import("./command").RunOptions} */
-  const options = { check: keys.has("check"), diff: keys.has("diff") };
+  const options = { check: keys.has("check"), diff: keys.has("diff"), step: keys.has("step") };
 
   if (keys.has("tags")) {
     const tags = await pickTags(availableTags, previous.tags);
@@ -301,6 +399,22 @@ async function pickRunOptions(previous = {}, availableTags = []) {
       return undefined;
     }
     options.tags = tags;
+  }
+
+  if (outline && keys.has("fromTask")) {
+    const name = await pickTask(outline, "From task", previous.fromTask);
+    if (name === undefined) {
+      return undefined;
+    }
+    options.fromTask = name;
+  }
+
+  if (outline && keys.has("untilTask")) {
+    const name = await pickTask(outline, "Until task", previous.untilTask || options.fromTask);
+    if (name === undefined) {
+      return undefined;
+    }
+    options.untilTask = name;
   }
 
   if (keys.has("limit")) {
@@ -323,7 +437,7 @@ async function pickRunOptions(previous = {}, availableTags = []) {
         description: value,
         value: Number(value),
       })),
-      { title: "Verbosity level" },
+      { title: "Verbosity level", ignoreFocusOut: true },
     );
     if (!level) {
       return undefined;
@@ -403,5 +517,6 @@ module.exports = {
   pickRunOptions,
   pickServiceName,
   pickTags,
+  pickTask,
   pickVaultGroup,
 };

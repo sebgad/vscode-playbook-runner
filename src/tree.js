@@ -24,6 +24,7 @@ const vscode = require("vscode");
 
 const { playbookLabel } = require("./command");
 const { findEnvironments, findServices } = require("./discovery");
+const { latestFor, relativeTime } = require("./history");
 const { findPlaybookTags } = require("./tags");
 const { productionPattern, readSettings } = require("./settings");
 
@@ -138,8 +139,9 @@ class PlaybookNode extends vscode.TreeItem {
    * @param {{ name: string, file: string }} playbook
    * @param {ServiceNode} parent
    * @param {import("./tags").PlaybookTag[]} [tags] as read out of the YAML
+   * @param {import("./history").RunEntry | null} [latest] its newest run in this environment
    */
-  constructor(playbook, parent, tags = []) {
+  constructor(playbook, parent, tags = [], latest = null) {
     // A playbook whose tags were not found stays a leaf: an arrow that opens
     // onto nothing is worse than no arrow.
     super(
@@ -156,10 +158,13 @@ class PlaybookNode extends vscode.TreeItem {
     this.isProduction = parent.isProduction;
     this.contextValue = "playbookRunner.playbook";
     this.resourceUri = vscode.Uri.file(playbook.file);
-    this.iconPath = new vscode.ThemeIcon(
-      "play",
-      parent.isProduction ? PRODUCTION_COLOR : NEUTRAL_COLOR,
-    );
+    this.iconPath =
+      latest && latest.status === "running"
+        ? new vscode.ThemeIcon("loading~spin")
+        : new vscode.ThemeIcon("play", parent.isProduction ? PRODUCTION_COLOR : NEUTRAL_COLOR);
+    if (latest) {
+      this.description = describeLatest(latest, Date.now());
+    }
 
     const label = playbookLabel(parent.folder.uri.fsPath, parent.settings, playbook.file);
     const tooltip = new vscode.MarkdownString(undefined, true);
@@ -180,6 +185,13 @@ class PlaybookNode extends vscode.TreeItem {
       "shell",
     );
     tooltip.appendMarkdown(`\n\n${parent.environment.name} — ${label}`);
+    if (latest) {
+      tooltip.appendMarkdown(
+        `\n\n$(history) Last run: ${describeLatest(latest, Date.now())}${
+          latest.message ? ` — ${latest.message}` : ""
+        }`,
+      );
+    }
     this.tooltip = tooltip;
 
     // Opening, not running: a click is how a file is read everywhere else in
@@ -324,8 +336,36 @@ class FolderNode extends vscode.TreeItem {
   }
 }
 
+/**
+ * "✓ 3 min ago" -- a row description is plain text, so the marks are
+ * characters rather than codicons.
+ *
+ * @param {import("./history").RunEntry} entry
+ * @param {number} now
+ * @returns {string}
+ */
+function describeLatest(entry, now) {
+  const when = relativeTime(entry.endedAt ?? entry.startedAt, now);
+  switch (entry.status) {
+    case "running":
+      return "running…";
+    case "passed":
+      return `✓ ${when}`;
+    case "failed":
+      return `✗ ${when}`;
+    case "cancelled":
+      return `cancelled ${when}`;
+    default:
+      return `result unknown · ${when}`;
+  }
+}
+
 class PlaybookRunnerTreeProvider {
-  constructor() {
+  /**
+   * @param {() => import("./history").RunEntry[]} [getHistory]
+   */
+  constructor(getHistory = () => []) {
+    this.getHistory = getHistory;
     this._onDidChangeTreeData = new vscode.EventEmitter();
     this.onDidChangeTreeData = this._onDidChangeTreeData.event;
   }
@@ -348,7 +388,10 @@ class PlaybookRunnerTreeProvider {
         return [new MessageNode("Open a folder with playbooks to see them")];
       }
       if (folders.length === 1) {
-        return this.folderChildren(first);
+        // An empty answer is what lets the welcome view (package.json
+        // viewsWelcome) take the place of a lone "nothing found" row.
+        const settings = readSettings(first);
+        return findEnvironments(first.uri.fsPath, settings).length ? this.folderChildren(first) : [];
       }
       return folders.map((folder) => new FolderNode(folder));
     }
@@ -439,12 +482,14 @@ class PlaybookRunnerTreeProvider {
    */
   playbookNodes(node) {
     const root = node.folder.uri.fsPath;
+    const history = this.getHistory();
     return node.service.playbooks.map(
       (playbook) =>
         new PlaybookNode(
           playbook,
           node,
           findPlaybookTags(root, playbook.file, node.settings),
+          latestFor(history, root, node.environment.name, playbook.file),
         ),
     );
   }
@@ -485,6 +530,7 @@ class PlaybookRunnerTreeProvider {
 }
 
 module.exports = {
+  describeLatest,
   EnvNode,
   EnvironmentNode,
   PlaybookRunnerTreeProvider,

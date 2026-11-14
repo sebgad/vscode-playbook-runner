@@ -33,6 +33,7 @@ const {
 const runner = require("./src/runner");
 const pickers = require("./src/pickers");
 const scaffold = require("./src/scaffold");
+const { relativeTime } = require("./src/history");
 const { readSettings } = require("./src/settings");
 const { RunTracker } = require("./src/tracker");
 const { PlaybookRunnerTreeProvider } = require("./src/tree");
@@ -160,7 +161,8 @@ async function runPlaybookCommand(context, tracker, argument, withOptions) {
     // is there without a vault passphrase and without a wait -- see src/tags.js
     // for what that trades away.
     const tags = findPlaybookTags(folder.uri.fsPath, playbookFile, settings);
-    const picked = await pickers.pickRunOptions(previous, tags);
+    const outline = findPlaybookOutline(folder.uri.fsPath, playbookFile, settings);
+    const picked = await pickers.pickRunOptions(previous, tags, outline);
     if (!picked) {
       return;
     }
@@ -529,12 +531,85 @@ class Watchers {
   }
 }
 
+/**
+ * The status bar item: the newest run, click to run it again.
+ */
+class LastRunStatus {
+  /** @param {RunTracker} tracker */
+  constructor(tracker) {
+    this.tracker = tracker;
+    this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
+    this.item.command = "playbookRunner.rerunLast";
+    this.item.name = "Playbook Runner: last run";
+    // The "3 min ago" goes stale on its own; a minute is as fine as it gets.
+    this.timer = setInterval(() => this.update(), 60_000);
+    this.update();
+  }
+
+  update() {
+    const [latest] = this.tracker.history;
+    if (!latest) {
+      this.item.hide();
+      return;
+    }
+    const icon = {
+      running: "$(loading~spin)",
+      passed: "$(pass)",
+      failed: "$(error)",
+      cancelled: "$(circle-slash)",
+      unknown: "$(question)",
+    }[latest.status];
+    this.item.text = `${icon} ${latest.environment} · ${latest.label}${
+      latest.status === "running" ? "" : ` · ${relativeTime(latest.endedAt ?? latest.startedAt, Date.now())}`
+    }`;
+    this.item.tooltip = `${describeRun(latest.label, latest.options)} against ${latest.environment}: ${
+      latest.message || latest.status
+    } — click to run it again`;
+    this.item.backgroundColor =
+      latest.status === "failed" ? new vscode.ThemeColor("statusBarItem.errorBackground") : undefined;
+    this.item.show();
+  }
+
+  dispose() {
+    clearInterval(this.timer);
+    this.item.dispose();
+  }
+}
+
+/**
+ * Whether any open folder has an environment -- what the welcome view in
+ * package.json is shown on.
+ */
+function updateEnvironmentContext() {
+  const any = (vscode.workspace.workspaceFolders || []).some(
+    (folder) => findEnvironments(folder.uri.fsPath, readSettings(folder)).length > 0,
+  );
+  void vscode.commands.executeCommand("setContext", "playbookRunner.noEnvironments", !any);
+}
+
 /** @param {vscode.ExtensionContext} context */
 function activate(context) {
-  const provider = new PlaybookRunnerTreeProvider();
-  const refresh = () => provider.refresh();
   const tracker = new RunTracker(context);
+  const provider = new PlaybookRunnerTreeProvider(() => tracker.history);
+  const treeView = vscode.window.createTreeView("playbookRunnerExplorer", {
+    treeDataProvider: provider,
+  });
+  const status = new LastRunStatus(tracker);
+  const refresh = () => {
+    updateEnvironmentContext();
+    provider.refresh();
+  };
   const watchers = new Watchers(refresh);
+  updateEnvironmentContext();
+
+  const onHistory = tracker.onDidChange(() => {
+    const running = tracker.history.filter((entry) => entry.status === "running").length;
+    treeView.badge = running
+      ? { value: running, tooltip: `${running} playbook${running === 1 ? "" : "s"} running` }
+      : undefined;
+    status.update();
+    provider.refresh();
+  });
 
   /**
    * @param {string} id
@@ -543,9 +618,11 @@ function activate(context) {
   const register = (id, handler) => vscode.commands.registerCommand(id, handler);
 
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider("playbookRunnerExplorer", provider),
+    treeView,
     watchers,
     tracker,
+    status,
+    onHistory,
 
     register("playbookRunner.runPlaybook", (node) =>
       runPlaybookCommand(context, tracker, node, false),
