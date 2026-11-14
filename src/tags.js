@@ -558,6 +558,7 @@ function findPlaybookTags(root, playbookFile, settings) {
  * @typedef {object} PlaybookOutline
  * @property {OutlinePlay[]} plays
  * @property {string | null} strategy  the first play-level `strategy:`, which would bypass a range run
+ * @property {string | null} serial    the first play-level `serial:`; batches would replay a range
  * @property {number} skipped          tasks left out because they have no name
  */
 
@@ -567,6 +568,7 @@ function findPlaybookTags(root, playbookFile, settings) {
  * @property {import("./defaults").Settings} settings
  * @property {OutlinePlay[]} plays
  * @property {string | null} strategy
+ * @property {string | null} serial
  * @property {number} skipped
  * @property {number} reads   files opened so far, against MAX_FILES
  * @property {Set<string>} stack  real paths of the files being walked right now
@@ -879,6 +881,10 @@ function outlinePlaybook(state, file) {
       if (strategy && state.strategy === null) {
         state.strategy = unquote(strategy.value) || "?";
       }
+      const serial = fields.get("serial");
+      if (serial && state.serial === null) {
+        state.serial = unquote(serial.value) || "?";
+      }
 
       const nameField = fields.get("name");
       const hostsText = unquote(hosts.value);
@@ -945,12 +951,13 @@ function findPlaybookOutline(root, playbookFile, settings) {
     settings: { ...DEFAULTS, ...(settings || {}) },
     plays: [],
     strategy: null,
+    serial: null,
     skipped: 0,
     reads: 0,
     stack: new Set(),
   };
   outlinePlaybook(state, playbookFile);
-  return { plays: state.plays, strategy: state.strategy, skipped: state.skipped };
+  return { plays: state.plays, strategy: state.strategy, serial: state.serial, skipped: state.skipped };
 }
 
 /**

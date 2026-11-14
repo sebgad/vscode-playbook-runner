@@ -359,6 +359,7 @@ const OUTLINE_FIXTURE = [
     `- name: Second play
   hosts: nfs_servers
   strategy: free
+  serial: 1
   tasks:
     - name: other task
       ansible.builtin.debug: msg=o
@@ -459,6 +460,12 @@ describe("findPlaybookOutline", () => {
     assert.ok(!outlineTaskNames(outline).includes("in rescue"));
   });
 
+  it("reports a play-level serial", () => {
+    assert.equal(outline.serial, "1");
+    const loop = findPlaybookOutline(root, path.join(root, "playbooks/loop/loop.yml"));
+    assert.equal(loop.serial, null);
+  });
+
   it("reports a play-level strategy", () => {
     assert.equal(outline.strategy, "free");
     const plain = findPlaybookOutline(root, path.join(root, "playbooks/app/other.yml"));
@@ -485,6 +492,7 @@ describe("findPlaybookOutline", () => {
     assert.deepEqual(findPlaybookOutline(root, path.join(root, "playbooks/nope.yml")), {
       plays: [],
       strategy: null,
+      serial: null,
       skipped: 0,
     });
   });

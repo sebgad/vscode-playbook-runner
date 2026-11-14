@@ -106,8 +106,12 @@ class RunTracker {
       return;
     }
     const id = definition.runId;
+    // Only a run this window started and still has running. A replay of an
+    // old task (VS Code's Rerun Last Task) or a terminal that outlived a
+    // reload must not overwrite a finished or "unknown" entry with a result
+    // that lacks the range verdict.
     const before = this._history.find((entry) => entry.id === id);
-    if (!before) {
+    if (!before || before.status !== "running") {
       return;
     }
     const statusFile = this.statusFiles.get(id);

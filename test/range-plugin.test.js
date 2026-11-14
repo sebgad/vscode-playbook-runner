@@ -84,6 +84,18 @@ const FIXTURE = [
   ["roles/u/tasks/main.yml", '- name: u1\n  ansible.builtin.debug:\n    msg: "RAN:u1"\n'],
   ["roles/r/tasks/main.yml", '- name: t\n  ansible.builtin.debug:\n    msg: "RAN:t"\n'],
   [
+    "collision.yml",
+    play(
+      "collision",
+      "    - ansible.builtin.import_role:\n        name: cr\n" + task("middle", "middle") + task("Create user", "play_create") + task("last", "last"),
+    ),
+  ],
+  ["roles/cr/tasks/main.yml", '- name: Create user\n  ansible.builtin.debug:\n    msg: "RAN:role_create"\n'],
+  [
+    "serial.yml",
+    `- name: rolling\n  hosts: all\n  connection: local\n  gather_facts: false\n  serial: 1\n  tasks:\n${task("a", "a")}${task("b", "b")}`,
+  ],
+  [
     "names.yml",
     play(
       "names",
@@ -119,11 +131,15 @@ describe("range strategy plugin", { skip: ANSIBLE ? false : "ansible-playbook no
    * @param {string} playbook
    * @param {import("../src/command").RunOptions} options
    * @param {string[]} [setupTags]
+   * @param {{ arm?: boolean, inventory?: string }} [opts]  arm: write the one-shot token the extension writes
    * @returns {Promise<RunResult>}
    */
-  const run = (playbook, options, setupTags = ["podman-user-setup"]) => {
+  const run = (playbook, options, setupTags = ["podman-user-setup"], opts = {}) => {
     counter += 1;
     const statusFile = path.join(root, `status-${counter}.json`);
+    if (opts.arm !== false) {
+      fs.writeFileSync(statusFile, JSON.stringify({ armed: true }));
+    }
     const env = {
       ...process.env,
       ...buildPlaybookEnv({ options, setupTags, pluginDir: PLUGIN_DIR, statusFile }),
@@ -133,7 +149,7 @@ describe("range strategy plugin", { skip: ANSIBLE ? false : "ansible-playbook no
       ANSIBLE_INVENTORY_UNPARSED_WARNING: "false",
     };
     return new Promise((resolve, reject) => {
-      const child = spawn(String(ANSIBLE), ["-i", "localhost,", playbook], { cwd: root, env });
+      const child = spawn(String(ANSIBLE), ["-i", opts.inventory || "localhost,", playbook], { cwd: root, env });
       let stdout = "";
       child.stdout.on("data", (chunk) => {
         stdout += chunk;
@@ -221,6 +237,44 @@ describe("range strategy plugin", { skip: ANSIBLE ? false : "ansible-playbook no
     const result = await run("basic.yml", { fromTask: "nope" });
     assert.deepEqual(result.ran, ["s1"], result.stdout);
     assert.deepEqual(result.status, { fromMatched: false, untilMatched: false });
+  });
+
+  it("matches the role-prefixed name only, never a role task that shares the bare name", async () => {
+    const only = await run("collision.yml", { fromTask: "Create user", untilTask: "Create user" });
+    assert.deepEqual(only.ran, ["play_create"], only.stdout);
+    const from = await run("collision.yml", { fromTask: "Create user" });
+    assert.deepEqual(from.ran, ["play_create", "last"], from.stdout);
+    const role = await run("collision.yml", { fromTask: "cr : Create user", untilTask: "cr : Create user" });
+    assert.deepEqual(role.ran, ["role_create"], role.stdout);
+  });
+
+  it("refuses a serial play before any task runs", async () => {
+    const result = await run("serial.yml", { fromTask: "b" }, [], { inventory: "h1,h2," });
+    assert.deepEqual(result.ran, [], result.stdout);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stdout, /serial/);
+  });
+
+  it("refuses a run whose status file was not armed -- a replayed task", async () => {
+    const result = await run("basic.yml", { untilTask: "a" }, undefined, { arm: false });
+    assert.deepEqual(result.ran, [], result.stdout);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stdout, /Playbook Runner/);
+  });
+
+  it("refuses an ansible-core it was not tested against", () => {
+    const python = path.join(path.dirname(String(ANSIBLE)), "python3");
+    /** @param {string} version */
+    const check = (version) =>
+      spawnSync(
+        fs.existsSync(python) ? python : "python3",
+        ["-c", `import sys; sys.path.insert(0, ${JSON.stringify(PLUGIN_DIR)}); import playbook_runner_range as p; p.check_compatible(${JSON.stringify(version)})`],
+        { encoding: "utf8" },
+      );
+    assert.equal(check("2.22.0").status, 0, check("2.22.0").stderr);
+    const newer = check("2.23.0");
+    assert.notEqual(newer.status, 0);
+    assert.match(newer.stderr, /2\.23\.0/);
   });
 
   it("announces itself", async () => {

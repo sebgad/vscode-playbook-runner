@@ -230,6 +230,14 @@ async function startPlaybookRun(context, tracker, run) {
       return;
     }
     statusFile = path.join(runsDir, `${runId}.json`);
+    try {
+      // The one-shot token the range plugin insists on: it replaces this
+      // with its result, so a replay of this task cannot run unchecked.
+      fs.writeFileSync(statusFile, JSON.stringify({ armed: true }));
+    } catch (err) {
+      vscode.window.showErrorMessage(`Playbook Runner: could not write ${statusFile}: ${messageOf(err)}`);
+      return;
+    }
     env = buildPlaybookEnv({
       options,
       setupTags: settings.setupTags,

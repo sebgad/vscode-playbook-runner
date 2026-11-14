@@ -127,14 +127,18 @@ start.
 
 A range that cannot work is refused before anything runs: a task that is not
 in the playbook (also for *Re-run Last* after a rename), an end before the
-start, or a playbook that sets `strategy:` itself, which would bypass the
-plugin. If an edge still never matched during a run, the run counts as failed
-and says which one.
+start, a playbook that sets `strategy:` itself (which would bypass the
+plugin), or one with a `serial:` play. If an edge still never matched during a
+run, the run counts as failed and says which one.
+
+A range run can only be started from Playbook Runner. VS Code's own *Tasks:
+Rerun Last Task* would replay it without those checks, so the plugin refuses a
+replay before any task runs; use *Playbook Runner: Re-run Last* instead.
 
 The plugin overrides part of ansible-core's `linear` strategy, so an
-ansible-core upgrade can break it; `npm test` runs it against the installed
-ansible-core on throwaway `localhost` playbooks and fails if it does. It is
-known to work with ansible-core 2.22.
+ansible-core upgrade can break it. It refuses to run on any ansible-core other
+than the ones it was tested with (2.22), and `npm test` runs it against the
+installed ansible-core on throwaway `localhost` playbooks.
 
 `--step` is a run option too: ansible asks before each task in the terminal.
 

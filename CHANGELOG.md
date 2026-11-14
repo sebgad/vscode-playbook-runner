@@ -10,7 +10,8 @@
   with the extension does it; tasks tagged with the new
   `playbookRunner.setupTags` (default `podman-user-setup`) still run before
   the start. A range whose task is not in the playbook, or whose end comes
-  before its start, is refused before anything runs.
+  before its start, is refused before anything runs, as is one on a playbook
+  with `serial:` or on an ansible-core other than 2.22.
 * `--step` is a run option.
 * Playbook rows show their last run (`✓ 3 min ago`, spinner while running),
   the activity bar icon counts running playbooks, and a status bar item shows

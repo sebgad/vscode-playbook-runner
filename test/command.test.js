@@ -369,9 +369,10 @@ describe("validateTaskRange", () => {
   /**
    * @param {string[]} names
    * @param {string | null} [strategy]
+   * @param {string | null} [serial]
    * @returns {import("../src/tags").PlaybookOutline}
    */
-  const outlineOf = (names, strategy = null) => ({
+  const outlineOf = (names, strategy = null, serial = null) => ({
     plays: [
       {
         name: "play",
@@ -387,6 +388,7 @@ describe("validateTaskRange", () => {
       },
     ],
     strategy,
+    serial,
     skipped: 0,
   });
   const outline = outlineOf(["a", "r : b", "c"]);
@@ -413,6 +415,12 @@ describe("validateTaskRange", () => {
     const free = outlineOf(["a"], "free");
     assert.match(String(validateTaskRange(free, { fromTask: "a" })), /strategy/);
     assert.equal(validateTaskRange(free, {}), null);
+  });
+
+  it("refuses any range on a playbook with a serial play", () => {
+    const rolling = outlineOf(["a"], null, "1");
+    assert.match(String(validateTaskRange(rolling, { untilTask: "a" })), /serial/);
+    assert.equal(validateTaskRange(rolling, {}), null);
   });
 
   it("takes the first occurrence of until at or after from", () => {

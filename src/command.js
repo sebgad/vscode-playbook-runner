@@ -193,7 +193,8 @@ function buildPlaybookEnv(spec) {
  * an edge the plugin would never match -- a renamed task in a remembered last
  * run, an until before the from -- is refused before anything starts. So is a
  * playbook that sets `strategy:` itself, because a play keyword beats
- * ANSIBLE_STRATEGY and the plugin would never be loaded.
+ * ANSIBLE_STRATEGY and the plugin would never be loaded, and one with a
+ * `serial:` play, whose later batches the plugin would not range again.
  *
  * @param {import("./tags").PlaybookOutline} outline
  * @param {RunOptions} options
@@ -205,6 +206,9 @@ function validateTaskRange(outline, options) {
   }
   if (outline.strategy) {
     return `this playbook sets "strategy: ${outline.strategy}", which would bypass the task-range plugin`;
+  }
+  if (outline.serial) {
+    return `this playbook sets "serial: ${outline.serial}"; each batch of hosts would need the range again, which the task-range plugin does not do`;
   }
   const names = outline.plays.flatMap((play) => play.tasks.map((task) => task.name));
   let start = 0;

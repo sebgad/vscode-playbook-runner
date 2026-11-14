@@ -384,9 +384,14 @@ tree without a reload.
     ansible-core's `linear` strategy. An ansible-core upgrade can break it,
     and the only signal is `test/range-plugin.test.js`, which runs the real
     ansible-playbook against `localhost,` playbooks of `debug` tasks.
-    Three things keep a broken or bypassed plugin from becoming a whole run
-    nobody asked for: a range is checked against a fresh outline before the
-    run (unknown task, end before start, a playbook that sets `strategy:`);
+    Several things keep a broken or bypassed plugin from becoming a whole run
+    nobody asked for: the plugin refuses an ansible-core it was not tested
+    with, a `serial:` play, and a run without the one-shot token the extension
+    writes into its status file (so VS Code's *Rerun Last Task* cannot replay a
+    range unchecked); task names match on `get_name()` only, so a play task
+    never matches a role task of the same bare name; a range is checked
+    against a fresh outline before the run (unknown task, end before start,
+    `strategy:` or `serial:`);
     the plugin prints a banner naming the range; and it writes whether each
     edge matched to a status file the extension reads when the task ends, so
     an edge that never matched marks the run failed. ansible-core takes its

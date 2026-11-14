@@ -32,11 +32,31 @@ import json
 import os
 
 from ansible import constants as C
+from ansible.errors import AnsibleError
 from ansible.playbook.handler import Handler
+from ansible.release import __version__ as ANSIBLE_VERSION
 from ansible.plugins.strategy.linear import StrategyModule as LinearStrategyModule
 from ansible.utils.display import Display
 
 display = Display()
+
+# The ansible-core releases test/range-plugin.test.js has passed against.
+# Anything else is refused rather than trusted: a renamed private method would
+# leave the override dead and `linear` would run the whole playbook.
+TESTED_VERSIONS = ("2.22",)
+
+
+def check_compatible(version):
+    """Raise unless this ansible-core is one the plugin was tested against and
+    still has the method it overrides."""
+    if not any(version == tested or version.startswith(tested + ".") for tested in TESTED_VERSIONS):
+        raise AnsibleError(
+            "Playbook Runner: the task-range plugin was tested with ansible-core %s, not %s. "
+            "Run the playbook without a task range, or update the plugin and its tests."
+            % (", ".join(TESTED_VERSIONS), version)
+        )
+    if "_get_next_task_lockstep" not in vars(LinearStrategyModule):
+        raise AnsibleError("Playbook Runner: this ansible-core's linear strategy has no _get_next_task_lockstep.")
 
 # meta tasks ansible inserts on its own; they keep handlers and roles working
 # and do nothing a range should hold back. A meta written in a playbook is
@@ -52,6 +72,7 @@ class _Range:
         self.from_task = os.environ.get("PLAYBOOK_RUNNER_FROM_TASK", "")
         self.until_task = os.environ.get("PLAYBOOK_RUNNER_UNTIL_TASK", "")
         self.status_file = os.environ.get("PLAYBOOK_RUNNER_STATUS_FILE", "")
+        self.consume_token()
         try:
             tags = json.loads(os.environ.get("PLAYBOOK_RUNNER_SETUP_TAGS", "[]"))
         except ValueError:
@@ -60,6 +81,23 @@ class _Range:
         self.from_matched = not self.from_task
         self.until_matched = False
         self.done = False
+
+    def consume_token(self):
+        """The extension writes {"armed": true} to the status file just before
+        it starts a range run, and nothing else ever does. This run replaces
+        it with its result, so the same task replayed -- VS Code's Rerun Last
+        Task, which skips the extension's checks -- finds no token and stops
+        before any task runs."""
+        try:
+            with open(self.status_file, encoding="utf-8") as handle:
+                armed = json.load(handle).get("armed") is True
+        except (OSError, ValueError, AttributeError):
+            armed = False
+        if not armed:
+            raise AnsibleError(
+                "Playbook Runner: this task-range run was not started by Playbook Runner, or has run already. "
+                "Start it again from the dashboard or the sidebar, so the range is checked first."
+            )
 
     def announce(self):
         start = "«%s»" % self.from_task if self.from_task else "the start"
@@ -77,8 +115,10 @@ class _Range:
             display.warning("Playbook Runner: could not write %s: %s" % (self.status_file, err))
 
     @staticmethod
-    def names(task):
-        return {task.get_name(), task.name}
+    def name_of(task):
+        # get_name() only, the way the outline names tasks: a play-level
+        # "Create user" must never match "somerole : Create user".
+        return task.get_name()
 
     def keep(self, task):
         if isinstance(task, Handler):
@@ -89,7 +129,7 @@ class _Range:
             return False
 
         if not self.from_matched:
-            if self.from_task not in self.names(task):
+            if self.from_task != self.name_of(task):
                 return (
                     task.action in C._ACTION_FACT_GATHERING
                     or task.action in C._ACTION_ALL_INCLUDES
@@ -100,7 +140,7 @@ class _Range:
 
         # Inside the range. Checked only here, so `until` is its first
         # occurrence at or after `from`.
-        if self.until_task and self.until_task in self.names(task):
+        if self.until_task and self.until_task == self.name_of(task):
             self.until_matched = True
             self.done = True
             self.write()
@@ -113,11 +153,24 @@ _RANGE = None
 class StrategyModule(LinearStrategyModule):
     def __init__(self, tqm):
         super().__init__(tqm)
+        check_compatible(ANSIBLE_VERSION)
         global _RANGE
         if _RANGE is None:
             _RANGE = _Range()
             _RANGE.announce()
         self._range = _RANGE
+
+    def run(self, iterator, play_context):
+        # A serial play is run batch after batch, each with a fresh strategy
+        # but the same range state, so the range would only hold for the
+        # first batch. The extension refuses such playbooks up front; this is
+        # the fail-safe, before the first task.
+        if iterator._play.serial:
+            raise AnsibleError(
+                "Playbook Runner: play %r sets serial:, which the task-range plugin does not support."
+                % iterator._play.get_name()
+            )
+        return super().run(iterator, play_context)
 
     def _get_next_task_lockstep(self, hosts, iterator):
         # The parent advances every host past the task it returns, so a batch
