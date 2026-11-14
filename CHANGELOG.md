@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+* **Settings tab** in the dashboard: every `playbookRunner.*` setting with its
+  description, where its value comes from, an editor that fits its type, and
+  *Reset*. Saves to the workspace's `.vscode/settings.json` (or *Move to User
+  settings*); the four machine settings — the ansible commands and the vault
+  password files — always go to User settings. Values are checked before
+  they are saved; a `productionPattern` that is not a valid regular expression
+  is refused instead of silently switching the production confirmation off.
+
 * **The sidebar is gone; the dashboard is the whole UI.** A
   `$(run-all) Playbook Runner` status bar item opens it (`· N running` while
   playbooks run). Everything the tree did is in the dashboard: ▶ per playbook,

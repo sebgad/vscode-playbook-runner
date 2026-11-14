@@ -707,3 +707,133 @@ input[type="text"]::placeholder {
 .empty-state p {
   color: var(--muted);
 }
+
+/* ── Settings tab ────────────────────────────────────────────────────── */
+
+.settings {
+  overflow-y: auto;
+  padding: 16px 24px 32px;
+  min-height: 0;
+  max-width: 920px;
+}
+
+.settings-intro {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-group {
+  font-size: 1.05em;
+  font-weight: 600;
+  margin: 24px 0 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.setting-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 6px;
+}
+
+.setting-row.invalid {
+  border-left: 2px solid var(--vscode-errorForeground);
+  padding-left: 10px;
+}
+
+.setting-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.setting-key {
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
+.setting-description {
+  margin: 0;
+  color: var(--muted);
+}
+
+.setting-text {
+  width: min(520px, 100%);
+  font-family: var(--mono);
+}
+
+.badge {
+  font-size: 0.8em;
+  border-radius: 10px;
+  padding: 0 8px;
+  line-height: 1.7;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.badge.source-workspace,
+.badge.source-user {
+  color: var(--vscode-badge-foreground);
+  background: var(--vscode-badge-background);
+  border-color: transparent;
+}
+
+.badge.machine {
+  color: var(--vscode-editorWarning-foreground);
+  border-color: currentColor;
+}
+
+.setting-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.chip-remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0 0 0 4px;
+  cursor: pointer;
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+.chip-remove .codicon {
+  font-size: 12px;
+}
+
+.setting-add {
+  width: 160px;
+}
+
+.setting-map {
+  display: grid;
+  gap: 4px;
+}
+
+.setting-map-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.setting-map-row code {
+  font-family: var(--mono);
+}
+
+.setting-actions {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}

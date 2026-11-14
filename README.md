@@ -58,8 +58,17 @@ to it shows the newest run and runs it again on click.
   [Adding a service](#adding-a-service)) and *Rekey vaults* for the environment
   shown (one `ansible-vault rekey` over every vault in it — one environment at
   a time, because the passphrase is per environment).
+* **The Settings tab** (top left: *Runs | Settings*) shows every setting below
+  with its description and where its value comes from (default, User or
+  Workspace), with an editor that fits it — text, on/off, a list, or
+  environment → password file rows — and *Reset*. A change is saved to this
+  workspace's `.vscode/settings.json`; *Move to User settings* moves a value to
+  your User settings instead. The four settings marked ⁽ᵐ⁾ below always go to
+  User settings. A value is checked before it is saved: the wrong type, an
+  empty name, or a `productionPattern` that is not a valid regular expression
+  is refused with the reason, and nothing is written.
 * With no environment found, the dashboard says where it looked and offers
-  *Open Settings*.
+  *Open Settings*, which opens the Settings tab.
 * The page is drawn only in VS Code's theme colours, so it follows light, dark
   and high-contrast themes.
 
@@ -290,6 +299,9 @@ afterwards. For VS Code Insiders or the Flatpak build, use
 `~/.var/app/com.visualstudio.code/data/vscode/extensions` instead.
 
 ## Configuration
+
+Every setting can be edited in the dashboard's Settings tab, or in VS Code's
+own Settings editor.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |

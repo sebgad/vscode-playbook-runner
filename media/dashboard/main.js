@@ -26,6 +26,7 @@
 
   const saved = /** @type {Record<string, any>} */ (vscode.getState() || {});
   const state = {
+    /** @type {"runs" | "settings"} */ tab: saved.tab === "settings" ? "settings" : "runs",
     /** @type {string | null} */ folder: typeof saved.folder === "string" ? saved.folder : null,
     /** @type {string | null} */ environment: typeof saved.environment === "string" ? saved.environment : null,
     /** @type {string | null} */ service: typeof saved.service === "string" ? saved.service : null,
@@ -51,6 +52,12 @@
 
   /** @type {any} */
   let model = null;
+  /** @type {any[]} the settings as the extension last sent them */
+  let settings = [];
+  /** @type {Map<string, string>} setting key -> why the last save was refused */
+  const settingErrors = new Map();
+  /** @type {Map<string, string>} setting key -> text kept in its field after a refused save */
+  const settingDrafts = new Map();
   /** @type {Record<string, string[]>} */
   let setupTags = {};
   /** @type {Map<string, any>} playbook file -> outline, or "loading" */
@@ -66,6 +73,7 @@
 
   function persist() {
     vscode.setState({
+      tab: state.tab,
       folder: state.folder,
       environment: state.environment,
       service: state.service,
@@ -369,12 +377,293 @@
 
   // ── Rendering ──────────────────────────────────────────────────────────
 
+  /** Runs | Settings */
+  function tabs() {
+    /** @param {"runs" | "settings"} tab @param {string} name @param {string} label */
+    const tabButton = (tab, name, label) =>
+      h(
+        "button",
+        {
+          role: "tab",
+          "aria-selected": String(state.tab === tab),
+          "data-key": `tab:${tab}`,
+          onclick: () => {
+            state.tab = tab;
+            changed();
+          },
+        },
+        icon(name),
+        label,
+      );
+    return h(
+      "div",
+      { class: "segmented", role: "tablist", "aria-label": "View" },
+      tabButton("runs", "play-circle", "Runs"),
+      tabButton("settings", "settings-gear", "Settings"),
+    );
+  }
+
+  // ── Settings tab ───────────────────────────────────────────────────────
+
+  /**
+   * Save a setting. Workspace unless the page asks for User; the extension
+   * moves a machine setting to User whatever is asked, and validates the value.
+   *
+   * @param {any} setting @param {unknown} value @param {"workspace" | "user"} [target]
+   */
+  function saveSetting(setting, value, target) {
+    vscode.postMessage({
+      type: "setSetting",
+      key: setting.key,
+      value,
+      target: target || (setting.machine ? "user" : "workspace"),
+    });
+  }
+
+  /** @param {any} setting */
+  function sourceOf(setting) {
+    if (setting.workspaceValue !== undefined) {
+      return "Workspace";
+    }
+    return setting.userValue !== undefined ? "User" : "default";
+  }
+
+  /** @param {any} setting */
+  function settingEditor(setting) {
+    const key = setting.key;
+    if (setting.type === "boolean") {
+      return h(
+        "label",
+        { class: "toggle" },
+        h("input", {
+          type: "checkbox",
+          checked: Boolean(setting.value),
+          "data-key": `setting:${key}`,
+          onchange: (/** @type {Event} */ e) => saveSetting(setting, /** @type {HTMLInputElement} */ (e.target).checked),
+        }),
+        setting.value ? "on" : "off",
+      );
+    }
+
+    if (setting.type === "string") {
+      const commit = (/** @type {HTMLInputElement} */ input) => {
+        if (input.value !== String(setting.value ?? "") || settingErrors.has(key)) {
+          settingDrafts.set(key, input.value);
+          saveSetting(setting, input.value);
+        }
+      };
+      return h("input", {
+        type: "text",
+        class: "setting-text",
+        value: settingDrafts.has(key) ? settingDrafts.get(key) : String(setting.value ?? ""),
+        placeholder: String(setting.defaultValue ?? ""),
+        spellcheck: "false",
+        "data-key": `setting:${key}`,
+        // `change` fires on Enter and on blur alike -- one save either way.
+        onchange: (/** @type {Event} */ e) => commit(/** @type {HTMLInputElement} */ (e.target)),
+      });
+    }
+
+    if (setting.type === "list") {
+      const items = Array.isArray(setting.value) ? setting.value : [];
+      return h(
+        "div",
+        { class: "setting-list" },
+        items.map((/** @type {string} */ item) =>
+          h(
+            "span",
+            { class: "chip on" },
+            item,
+            h(
+              "button",
+              {
+                class: "chip-remove",
+                title: `Remove ${item}`,
+                "aria-label": `Remove ${item}`,
+                onclick: () => saveSetting(setting, items.filter((/** @type {string} */ other) => other !== item)),
+              },
+              icon("close"),
+            ),
+          ),
+        ),
+        h("input", {
+          type: "text",
+          class: "setting-add",
+          placeholder: "add…",
+          spellcheck: "false",
+          "data-key": `setting-add:${key}`,
+          onkeydown: (/** @type {KeyboardEvent} */ e) => {
+            const input = /** @type {HTMLInputElement} */ (e.target);
+            if (e.key === "Enter" && input.value.trim()) {
+              saveSetting(setting, [...items, input.value]);
+              input.value = "";
+            }
+          },
+        }),
+      );
+    }
+
+    // map: environment -> password file
+    /** @type {Record<string, string>} */
+    const map = setting.value && typeof setting.value === "object" ? setting.value : {};
+    /** @type {HTMLInputElement | null} */
+    let nameInput = null;
+    /** @type {HTMLInputElement | null} */
+    let pathInput = null;
+    const add = () => {
+      if (nameInput && pathInput) {
+        saveSetting(setting, { ...map, [nameInput.value]: pathInput.value });
+      }
+    };
+    nameInput = /** @type {HTMLInputElement} */ (
+      h("input", { type: "text", placeholder: "environment", spellcheck: "false", "data-key": `setting-map-name:${key}` })
+    );
+    pathInput = /** @type {HTMLInputElement} */ (
+      h("input", {
+        type: "text",
+        placeholder: "password file",
+        spellcheck: "false",
+        "data-key": `setting-map-path:${key}`,
+        onkeydown: (/** @type {KeyboardEvent} */ e) => e.key === "Enter" && add(),
+      })
+    );
+    return h(
+      "div",
+      { class: "setting-map" },
+      Object.entries(map).map(([name, file]) =>
+        h(
+          "div",
+          { class: "setting-map-row" },
+          h("code", null, name),
+          icon("arrow-right"),
+          h("code", null, file),
+          h(
+            "button",
+            {
+              class: "icon-button",
+              title: `Remove ${name}`,
+              onclick: () => {
+                const next = { ...map };
+                delete next[name];
+                saveSetting(setting, next);
+              },
+            },
+            icon("close"),
+          ),
+        ),
+      ),
+      h(
+        "div",
+        { class: "setting-map-row" },
+        nameInput,
+        icon("arrow-right"),
+        pathInput,
+        h("button", { class: "icon-button", title: "Add", onclick: add }, icon("add"), h("span", { class: "label" }, "Add")),
+      ),
+    );
+  }
+
+  /** @param {any} setting */
+  function settingRow(setting) {
+    const source = sourceOf(setting);
+    const error = settingErrors.get(setting.key);
+    return h(
+      "div",
+      { class: `setting-row ${error ? "invalid" : ""}` },
+      h(
+        "div",
+        { class: "setting-head" },
+        h("code", { class: "setting-key" }, setting.key),
+        h("span", { class: `badge source-${source.toLowerCase()}`, title: "Where the value in effect comes from" }, source),
+        setting.machine
+          ? h(
+              "span",
+              { class: "badge machine", title: "Names something that gets executed, so only your User settings may set it" },
+              icon("shield"),
+              "machine · saved to User",
+            )
+          : null,
+      ),
+      h("p", { class: "setting-description" }, setting.description),
+      settingEditor(setting),
+      error ? h("p", { class: "error" }, icon("error"), error) : null,
+      h(
+        "div",
+        { class: "setting-actions" },
+        setting.workspaceValue !== undefined
+          ? h(
+              "button",
+              {
+                class: "link",
+                onclick: () => vscode.postMessage({ type: "resetSetting", key: setting.key, target: "workspace" }),
+              },
+              icon("discard"),
+              "Reset workspace value",
+            )
+          : null,
+        setting.userValue !== undefined
+          ? h(
+              "button",
+              {
+                class: "link",
+                onclick: () => vscode.postMessage({ type: "resetSetting", key: setting.key, target: "user" }),
+              },
+              icon("discard"),
+              "Reset user value",
+            )
+          : null,
+        !setting.machine && setting.workspaceValue !== undefined
+          ? h(
+              "button",
+              {
+                class: "link",
+                title: "Save this value to your User settings, for every workspace, and remove it from this workspace",
+                onclick: () => {
+                  saveSetting(setting, setting.workspaceValue, "user");
+                  vscode.postMessage({ type: "resetSetting", key: setting.key, target: "workspace" });
+                },
+              },
+              icon("account"),
+              "Move to User settings",
+            )
+          : null,
+      ),
+    );
+  }
+
+  function settingsPane() {
+    /** @type {Map<string, any[]>} */
+    const groups = new Map();
+    for (const setting of settings) {
+      const list = groups.get(setting.group) || [];
+      list.push(setting);
+      groups.set(setting.group, list);
+    }
+    return h(
+      "section",
+      { class: "settings", "data-scroll": "settings" },
+      h(
+        "p",
+        { class: "settings-intro" },
+        "Changes are saved to this workspace's .vscode/settings.json; settings marked machine go to your User settings. ",
+        h(
+          "button",
+          { class: "link", onclick: () => vscode.postMessage({ type: "openSettings" }) },
+          icon("link-external"),
+          "Open in VS Code Settings",
+        ),
+      ),
+      [...groups].flatMap(([title, list]) => [h("h2", { class: "settings-group" }, title), ...list.map(settingRow)]),
+    );
+  }
+
   /** @param {any} folder @param {any} environment */
   function topbar(folder, environment) {
     return h(
       "header",
       { class: "topbar" },
       h("h1", null, icon("run-all"), "Playbook Runner"),
+      tabs(),
       folderSelect(folder),
       h("span", { class: "spacer" }),
       h(
@@ -997,6 +1286,16 @@
     if (!model) {
       return [h("p", { class: "loading" }, "Loading…")];
     }
+    if (state.tab === "settings") {
+      // Reachable whatever the folder looks like: a wrong inventoriesDir is
+      // exactly when the settings are needed.
+      return [
+        h("header", { class: "topbar" }, h("h1", null, icon("run-all"), "Playbook Runner"), tabs()),
+        h("div"),
+        settingsPane(),
+        h("div"),
+      ];
+    }
     const folder = currentFolder();
     if (!folder) {
       return [h("p", { class: "empty" }, "Open a folder with playbooks to see them.")];
@@ -1017,7 +1316,18 @@
           h(
             "div",
             { class: "runbar-line" },
-            h("button", { class: "run", onclick: () => vscode.postMessage({ type: "openSettings" }) }, icon("settings-gear"), "Open Settings"),
+            h(
+              "button",
+              {
+                class: "run",
+                onclick: () => {
+                  state.tab = "settings";
+                  changed();
+                },
+              },
+              icon("settings-gear"),
+              "Open Settings",
+            ),
             h(
               "button",
               { class: "icon-button", onclick: () => vscode.postMessage({ type: "createService", folder: folder.path }) },
@@ -1071,6 +1381,7 @@
     if (message.type === "model") {
       model = message.model;
       setupTags = message.setupTags || {};
+      settings = Array.isArray(message.settings) ? message.settings : [];
       render();
       requestPreview();
       // Outlines are re-read on a model refresh: a file changed on disk is
@@ -1087,6 +1398,14 @@
       render();
     } else if (message.type === "preview") {
       preview = message;
+      render();
+    } else if (message.type === "settingResult") {
+      if (message.error) {
+        settingErrors.set(message.key, message.error);
+      } else {
+        settingErrors.delete(message.key);
+        settingDrafts.delete(message.key);
+      }
       render();
     }
   });

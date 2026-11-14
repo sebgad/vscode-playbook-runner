@@ -448,6 +448,18 @@ tree without a reload.
     `src/dashboard.js` builds the command node from discovery's objects and
     calls the same command the palette runs.
 
+20. ✅ a Settings tab in the dashboard: `src/settingsEdit.js`, which never
+    imports `vscode`, decides whether a value may be saved
+    (`validateSettingValue`, the same type rule `settings.js` reads by) and
+    where (`settingTarget`). A `machine` setting goes to User settings
+    whatever the page asks, which keeps the step-6 rule that a repository
+    cannot name what gets executed; `MACHINE_SETTINGS` is pinned to
+    package.json's `"scope": "machine"` entries by a test. Everything else is
+    saved to the workspace by default, because the layout belongs to the
+    repository. A `productionPattern` that does not compile is refused rather
+    than saved: compiled, it would mean "no environment is production" and
+    turn the confirmation off without a word.
+
 ## 10. Verification
 
 Automated (`npm test`, node --test):
