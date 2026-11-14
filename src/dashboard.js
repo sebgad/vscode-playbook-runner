@@ -14,12 +14,73 @@ const path = require("path");
 const vscode = require("vscode");
 
 const { shellQuote } = require("./command");
+const DEFAULTS = require("./defaults");
 const { findEnvironments } = require("./discovery");
 const model = require("./model");
 const { readSettings } = require("./settings");
+const settingsEdit = require("./settingsEdit");
 const { findPlaybookOutline, findPlaybookTags } = require("./tags");
 
 const VIEW_TYPE = "playbookRunner.dashboard";
+const SECTION = "playbookRunner";
+
+/**
+ * One setting as the Settings tab shows it.
+ *
+ * @typedef {object} SettingView
+ * @property {string} key
+ * @property {string} group
+ * @property {"string" | "boolean" | "list" | "map"} type
+ * @property {string} description
+ * @property {boolean} machine
+ * @property {unknown} value          the effective value
+ * @property {unknown} defaultValue
+ * @property {unknown} userValue      undefined when not set there
+ * @property {unknown} workspaceValue undefined when not set there
+ */
+
+/** @param {unknown} fallback */
+function settingType(fallback) {
+  if (typeof fallback === "boolean") {
+    return "boolean";
+  }
+  if (Array.isArray(fallback)) {
+    return "list";
+  }
+  return typeof fallback === "string" ? "string" : "map";
+}
+
+/**
+ * Every playbookRunner.* setting with its description from package.json and
+ * where its value comes from.
+ *
+ * @param {vscode.ExtensionContext} context
+ * @returns {SettingView[]}
+ */
+function settingViews(context) {
+  /** @type {Record<string, { description?: string, markdownDescription?: string }>} */
+  const properties =
+    (context.extension && context.extension.packageJSON.contributes.configuration.properties) || {};
+  const config = vscode.workspace.getConfiguration(SECTION);
+  return settingsEdit.SETTING_GROUPS.flatMap((group) =>
+    group.keys.map((key) => {
+      const spec = properties[`${SECTION}.${key}`] || {};
+      const inspected = config.inspect(key);
+      return {
+        key,
+        group: group.title,
+        type: settingType(/** @type {Record<string, unknown>} */ (DEFAULTS)[key]),
+        // `#playbookRunner.x#` is a settings-editor link; the tab shows text.
+        description: (spec.markdownDescription || spec.description || "").replace(/#playbookRunner\.(\w+)#/g, "$1"),
+        machine: settingsEdit.MACHINE_SETTINGS.includes(key),
+        value: config.get(key),
+        defaultValue: inspected ? inspected.defaultValue : undefined,
+        userValue: inspected ? inspected.globalValue : undefined,
+        workspaceValue: inspected ? inspected.workspaceValue : undefined,
+      };
+    }),
+  );
+}
 
 /**
  * @typedef {object} DashboardDeps
@@ -141,7 +202,47 @@ class DashboardPanel {
 
   update() {
     const { model: data, setupTags } = this.buildModel();
-    void this.panel.webview.postMessage({ type: "model", model: data, setupTags, now: Date.now() });
+    void this.panel.webview.postMessage({
+      type: "model",
+      model: data,
+      setupTags,
+      settings: settingViews(this.context),
+      now: Date.now(),
+    });
+  }
+
+  /**
+   * Save or reset one setting. The value is validated here, whatever the page
+   * checked, and a machine setting goes to User settings whatever the page
+   * asked for. The dashboard refreshes through onDidChangeConfiguration.
+   *
+   * @param {string} key
+   * @param {unknown} value  undefined resets
+   * @param {"workspace" | "user"} requested
+   */
+  async writeSetting(key, value, requested) {
+    /** @type {string | null} */
+    let error = null;
+    try {
+      let toSave = value;
+      if (value !== undefined) {
+        const checked = settingsEdit.validateSettingValue(key, value);
+        if (!checked.ok) {
+          throw new Error(checked.error);
+        }
+        toSave = checked.value;
+      } else if (!Object.prototype.hasOwnProperty.call(DEFAULTS, key)) {
+        throw new Error(`"${key}" is not a Playbook Runner setting`);
+      }
+      const target =
+        settingsEdit.settingTarget(key, requested) === "user"
+          ? vscode.ConfigurationTarget.Global
+          : vscode.ConfigurationTarget.Workspace;
+      await vscode.workspace.getConfiguration(SECTION).update(key, toSave, target);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+    void this.panel.webview.postMessage({ type: "settingResult", key, error });
   }
 
   /** @param {unknown} value */
@@ -174,6 +275,14 @@ class DashboardPanel {
 
     if (message.type === "rerunLast") {
       await this.deps.actions.rerunLast();
+      return;
+    }
+    if (message.type === "setSetting") {
+      await this.writeSetting(message.key, message.value, message.target);
+      return;
+    }
+    if (message.type === "resetSetting") {
+      await this.writeSetting(message.key, undefined, message.target);
       return;
     }
     if (message.type === "openSettings") {
