@@ -40,6 +40,7 @@ const STATUS_FILE_PLACEHOLDER = "<per-run status file>";
  * @property {ModelPlaybook[]} playbooks
  * @property {boolean} hasEnv
  * @property {boolean} hasVault
+ * @property {string | null} vaultFile  where its vault is or would be; null without group_vars
  * @property {string | null} envFile
  */
 
@@ -90,6 +91,7 @@ function buildDashboardModel(folders, readSettingsFor, history) {
             })),
             hasEnv: Boolean(service.vars && service.vars.hasEnv),
             hasVault: Boolean(service.vars && service.vars.hasVault),
+            vaultFile: service.vars ? service.vars.vaultFile : null,
             envFile: service.vars && service.vars.hasEnv ? service.vars.envFile : null,
           })),
         })),
@@ -102,7 +104,12 @@ function buildDashboardModel(folders, readSettingsFor, history) {
  * @typedef {{ type: "ready" }
  *   | { type: "outline", folder: string, playbook: string }
  *   | { type: "preview" | "run", folder: string, environment: string, playbook: string, options: import("./command").RunOptions }
- *   | { type: "open", folder: string, playbook: string, file: string, line: number }} WebviewMessage
+ *   | { type: "open", folder: string, playbook: string, file: string, line: number }
+ *   | { type: "vault", folder: string, environment: string, service: string, action: "edit" | "create" }
+ *   | { type: "rekey", folder: string, environment: string }
+ *   | { type: "createService", folder: string }
+ *   | { type: "rerunLast" }
+ *   | { type: "openSettings" }} WebviewMessage
  */
 
 /**
@@ -132,6 +139,27 @@ function parseWebviewMessage(value) {
   switch (raw.type) {
     case "ready":
       return { type: "ready" };
+    case "rerunLast":
+      return { type: "rerunLast" };
+    case "openSettings":
+      return { type: "openSettings" };
+    case "vault":
+      return allStrings(raw, ["folder", "environment", "service"]) &&
+        (raw.action === "edit" || raw.action === "create")
+        ? {
+            type: "vault",
+            folder: String(raw.folder),
+            environment: String(raw.environment),
+            service: String(raw.service),
+            action: raw.action,
+          }
+        : null;
+    case "rekey":
+      return allStrings(raw, ["folder", "environment"])
+        ? { type: "rekey", folder: String(raw.folder), environment: String(raw.environment) }
+        : null;
+    case "createService":
+      return allStrings(raw, ["folder"]) ? { type: "createService", folder: String(raw.folder) } : null;
     case "outline":
       return allStrings(raw, ["folder", "playbook"])
         ? { type: "outline", folder: String(raw.folder), playbook: String(raw.playbook) }
@@ -205,6 +233,52 @@ function offersPlaybook(folder, file) {
   return folder.environments.some((environment) =>
     environment.services.some((service) => service.playbooks.some((item) => item.file === file)),
   );
+}
+
+/**
+ * @param {DashboardModel} model
+ * @param {string} folderPath
+ * @returns {ModelFolder | null}
+ */
+function resolveFolderRequest(model, folderPath) {
+  return model.folders.find((item) => item.path === folderPath) ?? null;
+}
+
+/**
+ * @param {DashboardModel} model
+ * @param {string} folderPath
+ * @param {string} environmentName
+ * @returns {{ folder: ModelFolder, environment: ModelEnvironment } | null}
+ */
+function resolveEnvironmentRequest(model, folderPath, environmentName) {
+  const folder = resolveFolderRequest(model, folderPath);
+  const environment = folder && folder.environments.find((item) => item.name === environmentName);
+  return folder && environment ? { folder, environment } : null;
+}
+
+/**
+ * The service a vault message names, when the action fits it: edit needs a
+ * vault that exists, create one that does not -- ansible-vault create on an
+ * existing file is refused by ansible, edit on a missing one opens nothing.
+ * The vault file itself always comes from the model, never the message.
+ *
+ * @param {DashboardModel} model
+ * @param {WebviewMessage} message
+ * @returns {{ folder: ModelFolder, environment: ModelEnvironment, service: ModelService } | null}
+ */
+function resolveVaultRequest(model, message) {
+  if (message.type !== "vault") {
+    return null;
+  }
+  const found = resolveEnvironmentRequest(model, message.folder, message.environment);
+  const service = found && found.environment.services.find((item) => item.name === message.service);
+  if (!found || !service || !service.vaultFile) {
+    return null;
+  }
+  if ((message.action === "edit") !== service.hasVault) {
+    return null;
+  }
+  return { ...found, service };
 }
 
 /**
@@ -308,6 +382,9 @@ module.exports = {
   findOfferedPlaybook,
   parseWebviewMessage,
   playbookArgv,
+  resolveEnvironmentRequest,
+  resolveFolderRequest,
   resolveOpenRequest,
   resolveRunRequest,
+  resolveVaultRequest,
 };

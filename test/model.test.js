@@ -18,6 +18,9 @@ const {
   buildPreview,
   findOfferedPlaybook,
   parseWebviewMessage,
+  resolveEnvironmentRequest,
+  resolveFolderRequest,
+  resolveVaultRequest,
   resolveOpenRequest,
   resolveRunRequest,
   STATUS_FILE_PLACEHOLDER,
@@ -32,6 +35,7 @@ const FIXTURE = [
   "inventories/production/hosts.ini",
   "inventories/staging/group_vars/app/env.yml",
   "inventories/staging/group_vars/app/vault.yml",
+  "inventories/staging/group_vars/all/env.yml",
   [
     "playbooks/app/app.yml",
     "- name: Deploy\n  hosts: all\n  tasks:\n    - name: first\n      ansible.builtin.import_role:\n        name: r\n    - name: last\n      debug: msg=x\n",
@@ -88,9 +92,9 @@ describe("dashboard model", () => {
       const staging = environment("staging");
       assert.deepEqual(
         staging.services.map((service) => service.name),
-        ["app", "web"],
+        ["all", "app", "web"],
       );
-      const app = required(staging.services[0], "app");
+      const app = required(staging.services.find((s) => s.name === "app"), "app");
       assert.equal(app.hasEnv, true);
       assert.equal(app.hasVault, true);
       assert.equal(app.envFile, path.join(root, "inventories/staging/group_vars/app/env.yml"));
@@ -98,10 +102,22 @@ describe("dashboard model", () => {
     });
 
     it("attaches the newest run of each playbook in that environment, and nothing elsewhere", () => {
-      const app = required(environment("staging").services[0]?.playbooks[0], "app.yml");
+      const app = required(
+        environment("staging").services.find((s) => s.name === "app")?.playbooks[0],
+        "app.yml",
+      );
       assert.equal(app.label, "app/app.yml");
       assert.equal(app.latest?.id, "1");
       assert.equal(environment("production").services[0]?.playbooks[0]?.latest, null);
+    });
+
+    it("lists a vars-only service with its vault path, and no vault path without group_vars", () => {
+      const all = required(environment("staging").services.find((s) => s.name === "all"), "all");
+      assert.deepEqual(all.playbooks, []);
+      assert.equal(all.hasVault, false);
+      assert.equal(all.vaultFile, path.join(root, "inventories/staging/group_vars/all/vault.yml"));
+      const prodApp = required(environment("production").services.find((s) => s.name === "app"), "app");
+      assert.equal(prodApp.vaultFile, null);
     });
 
     it("carries no outlines -- those are asked for per playbook", () => {
@@ -155,6 +171,63 @@ describe("dashboard model", () => {
         options: { extraArgs: ["--become-password-file", "/x"], tags: "t" },
       });
       assert.deepEqual(message && "options" in message ? message.options : null, { tags: "t" });
+    });
+  });
+
+  describe("new action messages", () => {
+    it("parseWebviewMessage accepts the new types and rejects a bad action", () => {
+      const vault = { type: "vault", folder: "/f", environment: "staging", service: "app", action: "edit" };
+      assert.deepEqual(parseWebviewMessage({ ...vault, extra: 1 }), vault);
+      assert.deepEqual(parseWebviewMessage({ type: "rekey", folder: "/f", environment: "staging" }), {
+        type: "rekey",
+        folder: "/f",
+        environment: "staging",
+      });
+      assert.deepEqual(parseWebviewMessage({ type: "createService", folder: "/f" }), {
+        type: "createService",
+        folder: "/f",
+      });
+      assert.deepEqual(parseWebviewMessage({ type: "rerunLast" }), { type: "rerunLast" });
+      assert.deepEqual(parseWebviewMessage({ type: "openSettings" }), { type: "openSettings" });
+      assert.equal(parseWebviewMessage({ ...vault, action: "delete" }), null);
+      assert.equal(parseWebviewMessage({ ...vault, service: undefined }), null);
+      assert.equal(parseWebviewMessage({ type: "rekey", folder: "/f" }), null);
+      assert.equal(parseWebviewMessage({ type: "createService" }), null);
+    });
+
+    /** @param {Record<string, unknown>} fields */
+    const vault = (fields) =>
+      /** @type {import("../src/model").WebviewMessage} */ ({
+        type: "vault",
+        folder: root,
+        environment: "staging",
+        service: "app",
+        action: "edit",
+        ...fields,
+      });
+
+    it("resolveVaultRequest resolves a service that has the vault the action needs", () => {
+      const resolved = required(resolveVaultRequest(model, vault({})), "edit app");
+      assert.equal(resolved.service.vaultFile, path.join(root, "inventories/staging/group_vars/app/vault.yml"));
+      assert.equal(resolved.environment.name, "staging");
+      assert.ok(resolveVaultRequest(model, vault({ service: "all", action: "create" })));
+    });
+
+    it("resolveVaultRequest rejects", () => {
+      assert.equal(resolveVaultRequest(model, vault({ environment: "production" })), null);
+      assert.equal(resolveVaultRequest(model, vault({ service: "nope" })), null);
+      assert.equal(resolveVaultRequest(model, vault({ action: "create" })), null);
+      assert.equal(resolveVaultRequest(model, vault({ service: "all", action: "edit" })), null);
+      assert.equal(resolveVaultRequest(model, vault({ folder: "/elsewhere" })), null);
+      assert.equal(resolveVaultRequest(model, vault({ service: "web" })), null);
+    });
+
+    it("resolveEnvironmentRequest and resolveFolderRequest accept only what is open", () => {
+      assert.equal(resolveEnvironmentRequest(model, root, "staging")?.environment.name, "staging");
+      assert.equal(resolveEnvironmentRequest(model, root, "lab"), null);
+      assert.equal(resolveEnvironmentRequest(model, "/elsewhere", "staging"), null);
+      assert.equal(resolveFolderRequest(model, root)?.path, root);
+      assert.equal(resolveFolderRequest(model, "/elsewhere"), null);
     });
   });
 
