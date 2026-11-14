@@ -10,16 +10,31 @@
 
 "use strict";
 
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const vscode = require("vscode");
 
-const { sanitizeRunOptions } = require("./src/command");
+const {
+  buildPlaybookEnv,
+  describeRun,
+  hasTaskRange,
+  sanitizeRunOptions,
+  validateTaskRange,
+} = require("./src/command");
 const { findEnvironments, findVaultGroups } = require("./src/discovery");
 const { resolveVaultPasswordFile } = require("./src/paths");
-const { findPlaybookTags, formatTagList, parseTagList } = require("./src/tags");
+const {
+  findPlaybookOutline,
+  findPlaybookTags,
+  formatTagList,
+  parseTagList,
+} = require("./src/tags");
 const runner = require("./src/runner");
 const pickers = require("./src/pickers");
 const scaffold = require("./src/scaffold");
 const { readSettings } = require("./src/settings");
+const { RunTracker } = require("./src/tracker");
 const { PlaybookRunnerTreeProvider } = require("./src/tree");
 
 const LAST_RUN_KEY = "playbookRunner.lastRun";
@@ -118,10 +133,11 @@ async function resolveContext(node) {
  * reaches a command line either way.
  *
  * @param {vscode.ExtensionContext} context
+ * @param {RunTracker} tracker
  * @param {unknown} argument
  * @param {boolean} withOptions
  */
-async function runPlaybookCommand(context, argument, withOptions) {
+async function runPlaybookCommand(context, tracker, argument, withOptions) {
   const node = asCommandNode(argument);
   const resolved = await resolveContext(node);
   if (!resolved) {
@@ -134,8 +150,6 @@ async function runPlaybookCommand(context, argument, withOptions) {
   if (!playbookFile) {
     return;
   }
-
-  const label = runner.playbookLabel(folder.uri.fsPath, settings, playbookFile);
 
   /** @type {import("./src/command").RunOptions} */
   let options = {};
@@ -158,29 +172,96 @@ async function runPlaybookCommand(context, argument, withOptions) {
     }
   }
 
-  const description = options.tags ? `${label} --tags ${options.tags}` : label;
-  if (!(await pickers.confirmProduction(settings, environment, description))) {
+  await startPlaybookRun(context, tracker, { folder, settings, environment, playbookFile, options });
+}
+
+/**
+ * Everything every run goes through, whoever asked for it -- a tree row, the
+ * palette, Re-run Last or the dashboard: the task-range check, the production
+ * confirmation, the remembered last run, the history entry, and only then the
+ * task itself.
+ *
+ * @param {vscode.ExtensionContext} context
+ * @param {RunTracker} tracker
+ * @param {{ folder: vscode.WorkspaceFolder, settings: import("./src/defaults").Settings, environment: import("./src/discovery").Environment, playbookFile: string, options: import("./src/command").RunOptions }} run
+ */
+async function startPlaybookRun(context, tracker, run) {
+  const { folder, settings, environment, playbookFile, options } = run;
+  const root = folder.uri.fsPath;
+  const label = runner.playbookLabel(root, settings, playbookFile);
+
+  if (hasTaskRange(options)) {
+    // Against a fresh outline: a remembered run whose task was renamed since
+    // must stop here, not turn into a whole run.
+    const reason = validateTaskRange(findPlaybookOutline(root, playbookFile, settings), options);
+    if (reason) {
+      vscode.window.showErrorMessage(`Playbook Runner: cannot run ${label}: ${reason}.`);
+      return;
+    }
+  }
+
+  if (!(await pickers.confirmProduction(settings, environment, describeRun(label, options)))) {
     return;
   }
 
   /** @type {LastRun} */
   const lastRun = {
-    folderPath: folder.uri.fsPath,
+    folderPath: root,
     environmentName: environment.name,
     playbookFile,
     options,
   };
   await context.workspaceState.update(LAST_RUN_KEY, lastRun);
 
+  const runId = crypto.randomUUID();
+  /** @type {string | null} */
+  let statusFile = null;
+  /** @type {Record<string, string>} */
+  let env = {};
+  if (hasTaskRange(options)) {
+    const runsDir = path.join(context.globalStorageUri.fsPath, "runs");
+    try {
+      fs.mkdirSync(runsDir, { recursive: true });
+    } catch (err) {
+      vscode.window.showErrorMessage(`Playbook Runner: could not prepare ${runsDir}: ${messageOf(err)}`);
+      return;
+    }
+    statusFile = path.join(runsDir, `${runId}.json`);
+    env = buildPlaybookEnv({
+      options,
+      setupTags: settings.setupTags,
+      pluginDir: path.join(context.extensionPath, "ansible", "strategy"),
+      statusFile,
+    });
+  }
+
+  await tracker.begin(
+    {
+      id: runId,
+      folder: root,
+      environment: environment.name,
+      playbook: playbookFile,
+      label,
+      options,
+      startedAt: Date.now(),
+      status: "running",
+    },
+    statusFile,
+  );
+
   try {
-    await runner.runPlaybook(folder, settings, { environment, playbookFile, options });
+    await runner.runPlaybook(folder, settings, { environment, playbookFile, options, env, runId });
   } catch (err) {
+    await tracker.abandon(runId);
     vscode.window.showErrorMessage(`Playbook Runner: could not run ${label}: ${messageOf(err)}`);
   }
 }
 
-/** @param {vscode.ExtensionContext} context */
-async function rerunLast(context) {
+/**
+ * @param {vscode.ExtensionContext} context
+ * @param {RunTracker} tracker
+ */
+async function rerunLast(context, tracker) {
   const last = parseLastRun(context.workspaceState.get(LAST_RUN_KEY));
   if (!last) {
     vscode.window.showInformationMessage("Playbook Runner: nothing has been run yet.");
@@ -206,21 +287,13 @@ async function rerunLast(context) {
     return;
   }
 
-  const label = runner.playbookLabel(folder.uri.fsPath, settings, last.playbookFile);
-  const description = last.options.tags ? `${label} --tags ${last.options.tags}` : label;
-  if (!(await pickers.confirmProduction(settings, environment, description))) {
-    return;
-  }
-
-  try {
-    await runner.runPlaybook(folder, settings, {
-      environment,
-      playbookFile: last.playbookFile,
-      options: last.options,
-    });
-  } catch (err) {
-    vscode.window.showErrorMessage(`Playbook Runner: could not run ${label}: ${messageOf(err)}`);
-  }
+  await startPlaybookRun(context, tracker, {
+    folder,
+    settings,
+    environment,
+    playbookFile: last.playbookFile,
+    options: last.options,
+  });
 }
 
 /**
@@ -460,6 +533,7 @@ class Watchers {
 function activate(context) {
   const provider = new PlaybookRunnerTreeProvider();
   const refresh = () => provider.refresh();
+  const tracker = new RunTracker(context);
   const watchers = new Watchers(refresh);
 
   /**
@@ -471,13 +545,18 @@ function activate(context) {
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("playbookRunnerExplorer", provider),
     watchers,
+    tracker,
 
-    register("playbookRunner.runPlaybook", (node) => runPlaybookCommand(context, node, false)),
-    register("playbookRunner.runPlaybookWithOptions", (node) =>
-      runPlaybookCommand(context, node, true),
+    register("playbookRunner.runPlaybook", (node) =>
+      runPlaybookCommand(context, tracker, node, false),
     ),
-    register("playbookRunner.runPlaybookTag", (node) => runPlaybookCommand(context, node, false)),
-    register("playbookRunner.rerunLast", () => rerunLast(context)),
+    register("playbookRunner.runPlaybookWithOptions", (node) =>
+      runPlaybookCommand(context, tracker, node, true),
+    ),
+    register("playbookRunner.runPlaybookTag", (node) =>
+      runPlaybookCommand(context, tracker, node, false),
+    ),
+    register("playbookRunner.rerunLast", () => rerunLast(context, tracker)),
     register("playbookRunner.editVault", (node) => vaultCommand(node, "edit")),
     register("playbookRunner.createVault", (node) => vaultCommand(node, "create")),
     register("playbookRunner.rekeyVaults", (node) => rekeyVaultsCommand(node)),

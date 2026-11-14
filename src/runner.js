@@ -54,7 +54,12 @@ function quoteArgs(args) {
 /**
  * @param {vscode.WorkspaceFolder} folder
  * @param {import("./defaults").Settings} settings
- * @param {{ environment: import("./discovery").Environment, playbookFile: string, options?: command.RunOptions }} request
+ * `env` is added to the task's environment -- the task-range variables from
+ * command.buildPlaybookEnv, never anything put into the command string --
+ * and `runId` goes into the task definition so the run's end can be matched
+ * back to its history entry.
+ *
+ * @param {{ environment: import("./discovery").Environment, playbookFile: string, options?: command.RunOptions, env?: Record<string, string>, runId: string }} request
  * @returns {Thenable<vscode.TaskExecution>}
  */
 function runPlaybook(folder, settings, request) {
@@ -70,12 +75,12 @@ function runPlaybook(folder, settings, request) {
   const execution = new vscode.ShellExecution(
     settings.ansiblePlaybookCommand,
     quoteArgs(args),
-    { cwd: root },
+    request.env && Object.keys(request.env).length ? { cwd: root, env: request.env } : { cwd: root },
   );
 
   const label = command.playbookLabel(root, settings, request.playbookFile);
   const task = new vscode.Task(
-    { type: "playbook-runner", environment: request.environment.name, playbook },
+    { type: "playbook-runner", environment: request.environment.name, playbook, runId: request.runId },
     folder,
     `${request.environment.name}: ${label}`,
     "Playbook Runner",
