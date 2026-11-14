@@ -1,5 +1,5 @@
 /**
- * The dashboard: a webview editor tab beside the sidebar tree.
+ * The dashboard: a webview editor tab, the extension's whole UI.
  *
  * Editor surface only. The page in media/dashboard/ renders what it is sent;
  * what it sends back goes through src/model.js -- parsed field by field, then
@@ -17,7 +17,7 @@ const { shellQuote } = require("./command");
 const { findEnvironments } = require("./discovery");
 const model = require("./model");
 const { readSettings } = require("./settings");
-const { findPlaybookOutline } = require("./tags");
+const { findPlaybookOutline, findPlaybookTags } = require("./tags");
 
 const VIEW_TYPE = "playbookRunner.dashboard";
 
@@ -25,6 +25,18 @@ const VIEW_TYPE = "playbookRunner.dashboard";
  * @typedef {object} DashboardDeps
  * @property {import("./tracker").RunTracker} tracker
  * @property {(run: { folder: vscode.WorkspaceFolder, settings: import("./defaults").Settings, environment: import("./discovery").Environment, playbookFile: string, options: import("./command").RunOptions }) => Promise<void>} startRun
+ * @property {DashboardActions} actions
+ */
+
+/**
+ * The extension's own commands, called with a node the dashboard builds from
+ * discovery's objects -- the same functions the palette runs.
+ *
+ * @typedef {object} DashboardActions
+ * @property {(node: object, action: "edit" | "create") => Promise<void>} vault
+ * @property {(node: object) => Promise<void>} rekey
+ * @property {(node: object) => Promise<void>} createService
+ * @property {() => Promise<void>} rerunLast
  */
 
 /** @param {string} fsPath */
@@ -149,13 +161,51 @@ class DashboardPanel {
       if (!workspaceFolder) {
         return;
       }
-      const outline = findPlaybookOutline(folder.path, message.playbook, readSettings(workspaceFolder));
+      const settings = readSettings(workspaceFolder);
       void this.panel.webview.postMessage({
         type: "outline",
         folder: folder.path,
         playbook: message.playbook,
-        outline,
+        outline: findPlaybookOutline(folder.path, message.playbook, settings),
+        tags: findPlaybookTags(folder.path, message.playbook, settings),
       });
+      return;
+    }
+
+    if (message.type === "rerunLast") {
+      await this.deps.actions.rerunLast();
+      return;
+    }
+    if (message.type === "openSettings") {
+      await vscode.commands.executeCommand("workbench.action.openSettings", "playbookRunner");
+      return;
+    }
+    if (message.type === "createService") {
+      const folder = model.resolveFolderRequest(this.model, message.folder);
+      const workspaceFolder = folder && workspaceFolderAt(folder.path);
+      if (workspaceFolder) {
+        await this.deps.actions.createService({ folder: workspaceFolder });
+      }
+      return;
+    }
+    if (message.type === "rekey") {
+      const found = model.resolveEnvironmentRequest(this.model, message.folder, message.environment);
+      const target = found && this.discovered(found.folder.path, found.environment.name);
+      if (target) {
+        await this.deps.actions.rekey(target);
+      }
+      return;
+    }
+    if (message.type === "vault") {
+      const found = model.resolveVaultRequest(this.model, message);
+      const target = found && this.discovered(found.folder.path, found.environment.name);
+      if (found && target && found.service.vaultFile) {
+        // The vault file comes from the model, never from the message.
+        await this.deps.actions.vault(
+          { ...target, vaultFile: found.service.vaultFile, hasVault: found.service.hasVault },
+          message.action,
+        );
+      }
       return;
     }
 
@@ -219,6 +269,21 @@ class DashboardPanel {
       playbookFile: resolved.playbook.file,
       options: message.options,
     });
+  }
+
+  /**
+   * The workspace folder and discovery's environment object for names the
+   * model offered -- what a command node is built from.
+   *
+   * @param {string} folderPath
+   * @param {string} environmentName
+   * @returns {{ folder: vscode.WorkspaceFolder, environment: import("./discovery").Environment } | null}
+   */
+  discovered(folderPath, environmentName) {
+    const folder = workspaceFolderAt(folderPath);
+    const environment =
+      folder && findEnvironments(folderPath, readSettings(folder)).find((item) => item.name === environmentName);
+    return folder && environment ? { folder, environment } : null;
   }
 
   /**

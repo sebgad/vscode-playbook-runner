@@ -239,7 +239,7 @@ function findPlaybooks(root, settings) {
  * Every group_vars directory of an environment, with its two files flagged by
  * existence. `hasVault` drives both vault operations -- groups that have one
  * can be edited, the others created, which is the whole difference between the
- * two vault commands -- while `envFile` is the plain, unencrypted half the tree
+ * two vault commands -- while `envFile` is the plain, unencrypted half the dashboard
  * opens in the editor.
  *
  * One env and one vault per group is assumed: they are fixed filenames, not a

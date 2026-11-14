@@ -1,6 +1,6 @@
 /**
  * The QuickPick chain -- environment, folder, playbook -- that the palette
- * commands use. It is the same walk the tree offers by clicking, and the same
+ * commands use. It is the same walk the dashboard offers by clicking, and the same
  * one the bash scripts did with `read -p`, so both habits share one code path.
  */
 

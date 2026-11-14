@@ -37,12 +37,12 @@ const { DashboardPanel, VIEW_TYPE } = require("./src/dashboard");
 const { relativeTime } = require("./src/history");
 const { readSettings } = require("./src/settings");
 const { RunTracker } = require("./src/tracker");
-const { PlaybookRunnerTreeProvider } = require("./src/tree");
 
 const LAST_RUN_KEY = "playbookRunner.lastRun";
 
 /**
- * A tree node, as it arrives back through a command argument. Every field is
+ * A command node, as it arrives back through a command argument from the
+ * dashboard. Every field is
  * optional: the same commands are in the palette, where there is no node and
  * everything gets asked for instead.
  *
@@ -106,7 +106,7 @@ function parseLastRun(value) {
 
 /**
  * Resolve a command invocation to folder + settings + environment, taking what
- * a tree node already knows and asking for the rest.
+ * a command node already knows and asking for the rest.
  *
  * @param {CommandNode} node
  * @returns {Promise<{ folder: vscode.WorkspaceFolder, settings: import("./src/defaults").Settings, environment: import("./src/discovery").Environment } | null>}
@@ -179,7 +179,7 @@ async function runPlaybookCommand(context, tracker, argument, withOptions) {
 }
 
 /**
- * Everything every run goes through, whoever asked for it -- a tree row, the
+ * Everything every run goes through, whoever asked for it -- the
  * palette, Re-run Last or the dashboard: the task-range check, the production
  * confirmation, the remembered last run, the history entry, and only then the
  * task itself.
@@ -403,23 +403,6 @@ async function rekeyVaultsCommand(argument) {
 }
 
 /**
- * @param {unknown} argument
- * @param {"playbookFile" | "envFile"} key
- */
-async function openFile(argument, key) {
-  const file = asCommandNode(argument)[key];
-  if (!file) {
-    return;
-  }
-  try {
-    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
-    await vscode.window.showTextDocument(document);
-  } catch (err) {
-    vscode.window.showErrorMessage(`Playbook Runner: could not open ${file}: ${messageOf(err)}`);
-  }
-}
-
-/**
  * Lay out the directories of a new service: playbooks/<name>/ once, and a
  * group_vars/<name>/ with an empty env file in every environment (or in those
  * playbookRunner.serviceEnvironments names), so a service cannot end up existing in
@@ -427,7 +410,7 @@ async function openFile(argument, key) {
  *
  * The plan is shown before anything is written, and only what is missing is
  * created -- an env file that exists is never touched. The vault is left to
- * `ansible-vault create`, which the tree offers on the new group_vars row.
+ * `ansible-vault create`, which the dashboard offers on the new service.
  *
  * @param {unknown} argument
  * @param {() => void} refresh
@@ -505,7 +488,7 @@ async function createServiceSkeleton(argument, refresh) {
 }
 
 /**
- * The file watchers that keep the tree current.
+ * The file watchers that keep the dashboard current.
  *
  * They are scoped to each folder's configured playbooks/ and inventories/
  * rather than the whole workspace, and rebuilt when either of those settings
@@ -596,44 +579,53 @@ class LastRunStatus {
 }
 
 /**
- * Whether any open folder has an environment -- what the welcome view in
- * package.json is shown on.
+ * The way in, now that there is no sidebar: an always-visible status bar item
+ * that opens the dashboard and counts the playbooks running.
  */
-function updateEnvironmentContext() {
-  const any = (vscode.workspace.workspaceFolders || []).some(
-    (folder) => findEnvironments(folder.uri.fsPath, readSettings(folder)).length > 0,
-  );
-  void vscode.commands.executeCommand("setContext", "playbookRunner.noEnvironments", !any);
+class DashboardLauncher {
+  /** @param {RunTracker} tracker */
+  constructor(tracker) {
+    this.tracker = tracker;
+    this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 11);
+    this.item.command = "playbookRunner.openDashboard";
+    this.item.name = "Playbook Runner";
+    this.item.tooltip = "Open the Playbook Runner dashboard";
+    this.update();
+    this.item.show();
+  }
+
+  update() {
+    const running = this.tracker.history.filter((entry) => entry.status === "running").length;
+    this.item.text = running ? `$(run-all) Playbook Runner · ${running} running` : "$(run-all) Playbook Runner";
+  }
+
+  dispose() {
+    this.item.dispose();
+  }
 }
 
 /** @param {vscode.ExtensionContext} context */
 function activate(context) {
   const tracker = new RunTracker(context);
-  const provider = new PlaybookRunnerTreeProvider(() => tracker.history);
-  const treeView = vscode.window.createTreeView("playbookRunnerExplorer", {
-    treeDataProvider: provider,
-  });
   const status = new LastRunStatus(tracker);
-  const refresh = () => {
-    updateEnvironmentContext();
-    provider.refresh();
-    DashboardPanel.refresh();
-  };
+  const launcher = new DashboardLauncher(tracker);
+  const refresh = () => DashboardPanel.refresh();
   /** @type {import("./src/dashboard").DashboardDeps} */
   const dashboardDeps = {
     tracker,
     startRun: (run) => startPlaybookRun(context, tracker, run),
+    actions: {
+      vault: (node, action) => vaultCommand(node, action),
+      rekey: (node) => rekeyVaultsCommand(node),
+      createService: (node) => createServiceSkeleton(node, refresh),
+      rerunLast: () => rerunLast(context, tracker),
+    },
   };
   const watchers = new Watchers(refresh);
-  updateEnvironmentContext();
 
   const onHistory = tracker.onDidChange(() => {
-    const running = tracker.history.filter((entry) => entry.status === "running").length;
-    treeView.badge = running
-      ? { value: running, tooltip: `${running} playbook${running === 1 ? "" : "s"} running` }
-      : undefined;
     status.update();
-    provider.refresh();
+    launcher.update();
     DashboardPanel.refresh();
   });
 
@@ -644,10 +636,10 @@ function activate(context) {
   const register = (id, handler) => vscode.commands.registerCommand(id, handler);
 
   context.subscriptions.push(
-    treeView,
     watchers,
     tracker,
     status,
+    launcher,
     onHistory,
 
     register("playbookRunner.runPlaybook", (node) =>
@@ -655,9 +647,6 @@ function activate(context) {
     ),
     register("playbookRunner.runPlaybookWithOptions", (node) =>
       runPlaybookCommand(context, tracker, node, true),
-    ),
-    register("playbookRunner.runPlaybookTag", (node) =>
-      runPlaybookCommand(context, tracker, node, false),
     ),
     register("playbookRunner.rerunLast", () => rerunLast(context, tracker)),
     register("playbookRunner.openDashboard", () => DashboardPanel.show(context, dashboardDeps)),
@@ -667,10 +656,7 @@ function activate(context) {
     register("playbookRunner.editVault", (node) => vaultCommand(node, "edit")),
     register("playbookRunner.createVault", (node) => vaultCommand(node, "create")),
     register("playbookRunner.rekeyVaults", (node) => rekeyVaultsCommand(node)),
-    register("playbookRunner.openPlaybook", (node) => openFile(node, "playbookFile")),
-    register("playbookRunner.openEnv", (node) => openFile(node, "envFile")),
     register("playbookRunner.createService", (node) => createServiceSkeleton(node, refresh)),
-    register("playbookRunner.refresh", refresh),
 
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       watchers.rebuild();

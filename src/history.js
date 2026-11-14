@@ -1,6 +1,6 @@
 /**
  * The run history: one entry per playbook run, newest first, kept in
- * workspace state. It is what the tree's "✓ 3 min ago", the status bar item
+ * workspace state. It is what the dashboard's "✓ 3 min ago", the status bar item
  * and the dashboard read.
  *
  * Like the other modules that decide things, this one imports `vscode`

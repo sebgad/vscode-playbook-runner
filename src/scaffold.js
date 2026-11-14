@@ -13,7 +13,7 @@
  *
  * Only the structure is created -- directories and empty env files. The vault
  * is deliberately left out: a vault has to be written encrypted by
- * `ansible-vault create`, which is what the tree's ＋ Vault row does once the
+ * `ansible-vault create`, which is what the dashboard's Create vault button does once the
  * group_vars directory exists.
  */
 

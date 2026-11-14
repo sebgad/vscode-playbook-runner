@@ -310,7 +310,7 @@ function readLines(file) {
 }
 
 /**
- * How an imported file is named beside a tag: the same shape the tree and the
+ * How an imported file is named beside a tag: the same shape the dashboard and the
  * task labels use, `podman_servers/acme.yml` rather than the whole path.
  *
  * @param {{ root: string, settings: import("./defaults").Settings }} state
