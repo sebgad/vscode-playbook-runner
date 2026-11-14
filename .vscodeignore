@@ -10,3 +10,4 @@ test/**
 tsconfig.json
 workflow.md
 **/*.map
+**/__pycache__/**
