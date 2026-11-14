@@ -1,108 +1,73 @@
 # Playbook Runner
 
-A VS Code sidebar and dashboard for running this repository's Ansible
-playbooks — whole, by tag, or a range of their tasks — and editing its vaults. Environments, playbooks and vaults are **discovered from the
-filesystem** — no path and no environment name is written down in the
-extension, so adding `inventories/lab/hosts.ini` or a new folder under
-`playbooks/` shows up without touching any code or config.
-
-The tree is **environment → service → Playbooks / Env / Vault**, with a
-playbook's tags one level below it. A service is `playbooks/<name>/` and
-`group_vars/<name>/` shown as one thing, so everything belonging to e.g.
-`authentik` sits in one place per environment. A service has
-one `env.yml` and one `vault.yml`, so those are rows that act on click rather
-than folders to open.
-
-```
-Playbook Runner (activity bar)
-├── production                       ← red: matches playbookRunner.productionPattern
-│   ├── authentik               1
-│   │   ├── Playbooks           1
-│   │   │   └── ▶ authentik.yml     ← click opens it, ▶ / ⚙ run it
-│   │   │       ├── ⌗ deploy-app                       ← ▶ runs only this tag
-│   │   │       ├── ⌗ nginx-reverse-proxy
-│   │   │       └── ⌗ podman-kube-start  podman/deploy-app  ← where it came from
-│   │   ├── ⌥ Env                    ← opens group_vars/authentik/env.yml
-│   │   └── 🔒 Vault                 ← ansible-vault edit
-│   ├── dns_servers             5 · no vault
-│   │   ├── Playbooks           5
-│   │   │   ├── ▶ setup-bind9.yml
-│   │   │   └── ▶ setup-dns-zones.yml
-│   │   ├── ⌥ Env
-│   │   └── ＋ Vault            create ← ansible-vault create
-│   └── all                             ← group_vars only
-│       ├── ⌥ Env
-│       └── 🔒 Vault
-└── staging
-    └── …
-```
-
-* A service needs only one of the two halves. `group_vars/all` has no
-  playbooks and shows only *Env* / *Vault*; a playbook folder the environment
-  has no variables for shows only *Playbooks*. Rows that would lead nowhere
-  are left out entirely — no *Env* row without an `env.yml`.
-* Because variables are per environment and playbooks are not, the same
-  service can look different under `production` and `staging`.
-* **Click a playbook** to open the file in the editor. `▶` on the row runs it
-  against that environment, `⚙` asks first: tags, a task range (*From task* /
-  *Until task*, see [Running part of a playbook](#running-part-of-a-playbook)),
-  `--limit`, verbosity, `--check`, `--diff` and `--step`. Tags are a checkbox list of the tags that playbook
-  actually has — see [Where the tag list comes from](#where-the-tag-list-comes-from).
-* **Expand a playbook** for those same tags as rows, in the order the run
-  reaches them, each showing the role it came from. `▶` on a tag row runs the
-  playbook with `--tags <that one>` and nothing else — the everyday
-  "just redeploy the app" run without going through `⚙` first. Clicking a tag
-  opens the playbook, like the row above it. A playbook whose tags were not
-  found has no arrow.
-* **Click Env** to open the plain, unencrypted `env.yml` in the editor.
-* **Click Vault** to `ansible-vault edit` it; without a `vault.yml` the row
-  reads `create` and runs `ansible-vault create` instead.
-* **Right-click an environment → *Rekey Vaults…*** rotates the passphrase of
-  every vault in that environment in one `ansible-vault rekey`. One environment
-  at a time, because the passphrase is per environment.
-* Production rows are red and ask for confirmation before running
-  (`playbookRunner.confirmProduction`).
-* A playbook row shows its **last run** in that environment — `✓ 3 min ago`,
-  `✗ 1 d ago`, a spinner while it runs — and the activity bar icon counts the
-  running ones. The **status bar** shows the newest run; click it to run it
-  again.
-* The command palette offers the same thing without the tree: *Playbook Runner: Run
-  Playbook* walks environment → service → playbook as QuickPicks, which is the
-  flow the old `run-ansible-playbooks.sh` had with `read -p`.
+A VS Code dashboard for running this repository's Ansible playbooks — whole,
+by tag, or a range of their tasks — and editing its vaults. Environments,
+playbooks and vaults are **discovered from the filesystem** — no path and no
+environment name is written down in the extension, so adding
+`inventories/lab/hosts.ini` or a new folder under `playbooks/` shows up without
+touching any code or config.
 
 ## Dashboard
 
-*Playbook Runner: Open Dashboard* (the `$(dashboard)` button on the view's
-title bar) opens an editor tab with the same environments and services, laid
-out for overview rather than for a narrow side bar:
+The **`$(run-all) Playbook Runner`** item on the left of the status bar opens
+the dashboard as an editor tab (so does *Playbook Runner: Open Dashboard* in the
+palette). While playbooks run it reads `· N running`; the status bar item next
+to it shows the newest run and runs it again on click.
 
 ```
-┌ Playbook Runner ───────────────────────────────── [● production] [● staging] ┐
-│ ⚠ production — runs here ask for confirmation before they start.            │
-├──────────────────┬───────────────────────────────────────────────────────────┤
-│ Filter services  │ authentik   1 playbook  env.yml  vault                    │
-│ ● authentik  3m  │ ▾ authentik.yml                          ✓ 3 min ago      │
-│ ● dns_servers 1d │   CREATE USER …  podman_servers  [podman-user-setup] …    │
-│ ○ immich         │   SETUP  podman/user : Ensure podman_user is defined      │
-│ …                │   FROM   podman/deploy-app : Get podman user UID          │
-│                  │   UNTIL  podman/deploy-app : Set podman user UID fact     │
-├──────────────────┴───────────────────────────────────────────────────────────┤
-│ authentik/authentik.yml  from … until … ✕   tags [   ] limit [   ] ☑ check   │
-│ $ ANSIBLE_STRATEGY=playbook_runner_range … ansible-playbook -i … --check     │
-│                                                       [ ▶ Run on staging ]   │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌ Playbook Runner        ↻ Re-run last  ⊕ New service…  ⚿ Rekey vaults  [● production] [● staging] ┐
+│ ⚠ production — runs here ask for confirmation before they start.                                │
+├──────────────────┬───────────────────────────────────────────────────────────────────────────────┤
+│ Filter services  │ authentik   1 playbook   env.yml   🔒 Edit vault                              │
+│ ○ all       vars │ ▾ authentik.yml                                    ✓ 3 min ago   ▶            │
+│ ● authentik   3m │   TAGS ▷ podman-user-setup  ▷ deploy-app  ▷ nginx-reverse-proxy …               │
+│ ● dns_servers 1d │   CREATE USER …  podman_servers  [podman-user-setup] …                        │
+│ ○ immich         │   SETUP  podman/user : Ensure podman_user is defined                          │
+│ …                │   FROM   podman/deploy-app : Get podman user UID                              │
+│                  │   UNTIL  podman/deploy-app : Set podman user UID fact                         │
+├──────────────────┴───────────────────────────────────────────────────────────────────────────────┤
+│ authentik/authentik.yml  from … until … ✕       tags [   ] limit [   ] verbosity [—] ☑ check      │
+│ $ env -C … ANSIBLE_STRATEGY=playbook_runner_range … ansible-playbook -i … --check               │
+│                                                                           [ ▶ Run on staging ]  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-* Each service shows its newest run; each playbook expands into its plays and
-  tasks, read the same way the tag list is.
-* **Click a task** to start the range there, click another to end it; hover a
-  row for *only*, *from*, *until* and *open in the editor*. Tags every task of
-  a play shares sit on the play's line. Click a tag to add it to `--tags`.
-* The bottom bar is the run: options, and the **exact command line** the run
-  will get, built by the same code the runner uses. *Run* goes through the
-  same path as `▶` in the tree — production confirmation, last run, history.
+* **Environments** are the tabs at the top; production (matching
+  `playbookRunner.productionPattern`) is red, with a banner, and every run
+  there asks for confirmation first (`playbookRunner.confirmProduction`).
+* **Services** are the list on the left. A service is `playbooks/<name>/` and
+  `group_vars/<name>/` shown as one thing; one with only variables (`all`)
+  is marked *vars*. Each shows its newest run. Because variables are per
+  environment and playbooks are not, the same service can look different
+  under `production` and `staging`.
+* **A service** shows its playbooks, a link to its plain `env.yml`, and
+  **Edit vault** (`ansible-vault edit`) — or **Create vault**
+  (`ansible-vault create`) while it has no `vault.yml`. Vaults open in a
+  terminal of their own.
+* **A playbook card**: `▶` runs it now with no options. Expanded, it shows its
+  **tags** in run order — `▷` runs only that tag, a click on the tag adds it to
+  `--tags` — and its plays and tasks, read the same way (see
+  [Where the tag list comes from](#where-the-tag-list-comes-from)).
+* **Click a task** to start a range there, click another to end it; hover a row
+  for *only*, *from*, *until* and *open in the editor*. See
+  [Running part of a playbook](#running-part-of-a-playbook).
+* **The run bar** at the bottom: tags, `--limit`, verbosity, `--check`,
+  `--diff`, `--step`, the **exact command line** the run will get (built by the
+  same code the runner uses), and *Run*.
+* **The top bar**: *Re-run last*, *New service…* (see
+  [Adding a service](#adding-a-service)) and *Rekey vaults* for the environment
+  shown (one `ansible-vault rekey` over every vault in it — one environment at
+  a time, because the passphrase is per environment).
+* With no environment found, the dashboard says where it looked and offers
+  *Open Settings*.
 * The page is drawn only in VS Code's theme colours, so it follows light, dark
   and high-contrast themes.
+
+Every run goes the same way, whichever button started it: task-range check,
+production confirmation, remembered as the last run, recorded in the history.
+The palette commands (*Run Playbook*, *Run Playbook with Options…*, *Edit
+Vault*, …) still work without the dashboard, walking environment → service →
+playbook as QuickPicks.
 
 ## Running part of a playbook
 
@@ -144,8 +109,8 @@ installed ansible-core on throwaway `localhost` playbooks.
 
 ## Where the tag list comes from
 
-The tag rows under a playbook, and the checkbox list *Tags* under `⚙` opens,
-are the same list, so both show the tags that playbook has rather than an empty
+The *Tags* line of a playbook card, and the checkbox list the *Run Playbook
+with Options…* command opens, are the same list, so both show the tags that playbook has rather than an empty
 box to type into. They are read out of the YAML: the playbook,
 every playbook it `import_playbook`s, and the task files of the roles it pulls
 in through `roles:`, `import_role` or `include_role` — `roles/` by default,
@@ -157,9 +122,8 @@ with the role it came from. A tag that was ticked last time and is not in the
 playbook any more stays in the list, ticked and marked, rather than quietly
 disappearing from the next run.
 
-The scan costs about a millisecond per playbook and runs when a service's
-*Playbooks* section is opened — the answer decides whether a playbook row gets
-an expand arrow at all, so it cannot wait until the row is expanded.
+The scan costs about a millisecond per playbook and runs when a playbook card
+is expanded.
 
 This is deliberately *not* `ansible-playbook --list-tags`, which is the
 authoritative answer but needs the inventory, the vault passphrase and a second
@@ -172,7 +136,7 @@ straight there.
 
 ## Rotating vault passphrases
 
-*Playbook Runner: Rekey Vaults…*, or the same command on an environment's context menu,
+*Rekey vaults* in the dashboard's top bar (or *Playbook Runner: Rekey Vaults…*),
 hands every `vault.yml` in that environment to one `ansible-vault rekey`. It
 asks once for the current passphrase and twice for the new one; production asks
 to confirm a second time.
@@ -212,11 +176,11 @@ inventories/staging/group_vars/<name>/env.yml      ← empty
   is all of them, `["staging"]` lays out only staging. A listed name with no
   `hosts.ini` behind it is skipped and named in the confirmation — the command
   never creates an inventory, because a directory without one is not an
-  environment and its group_vars would never show up in the tree.
+  environment and its group_vars would never show up in the dashboard.
 * **Structure only.** The env files are created empty, and an env file that
   already exists is never touched — it is opened with `wx`, not truncated.
 * **No vault is created.** A `vault.yml` has to be written encrypted, so the
-  new group_vars directory shows the ＋ *Vault* row and
+  new service shows **Create vault** in the dashboard, and
   `ansible-vault create` does it from there.
 * The plan is shown as a list of paths before anything is written, and the name
   must be a plain directory name (letters, digits, dot, dash, underscore) —
@@ -334,7 +298,7 @@ afterwards. For VS Code Insiders or the Flatpak build, use
 | `playbookRunner.inventoriesDir` | `inventories` | One subdirectory per environment. |
 | `playbookRunner.inventoryFile` | `hosts.ini` | A directory counts as an environment when it contains this. |
 | `playbookRunner.groupVarsDir` | `group_vars` | Group variables directory inside an environment. |
-| `playbookRunner.envFileName` | `env.yml` | Unencrypted variables filename inside a group; the *Env* row opens it. |
+| `playbookRunner.envFileName` | `env.yml` | Unencrypted variables filename inside a group; the dashboard's `env.yml` link opens it. |
 | `playbookRunner.vaultFileName` | `vault.yml` | Vault filename inside a group. |
 | `playbookRunner.vaultPasswordFilePattern` ⁽ᵐ⁾ | `${userHome}/.ansible-vault/${env}.pass` | Supports `${userHome}`, `${workspaceFolder}`, `${env}`. Empty string always prompts. |
 | `playbookRunner.vaultPasswordFiles` ⁽ᵐ⁾ | `{}` | Per-environment override of the pattern. |
@@ -363,8 +327,12 @@ src/paths.js        ${...} expansion, vault password and production rules  ⟵ l
 src/tags.js         the tags a playbook offers, read out of the YAML  ⟵ likewise
 src/scaffold.js     the paths a new service is laid out at  ⟵ likewise
 src/settings.js     reading the settings out of vscode
-src/runner.js       task and terminal execution
-src/tree.js         the tree provider and its nodes
+src/history.js      the run history  ⟵ likewise
+src/model.js        the dashboard model and the checks on its messages  ⟵ likewise
+src/runner.js       the runner and vault terminals
+src/tracker.js      recording runs in the history
+src/dashboard.js    the dashboard webview panel
+media/dashboard/    the dashboard page
 src/pickers.js      the QuickPick chain used by the palette commands
 ```
 

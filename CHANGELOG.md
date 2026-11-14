@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+* **The sidebar is gone; the dashboard is the whole UI.** A
+  `$(run-all) Playbook Runner` status bar item opens it (`· N running` while
+  playbooks run). Everything the tree did is in the dashboard: ▶ per playbook,
+  ▷ per tag, Edit/Create vault per service, Rekey vaults, New service…,
+  Re-run last, and services that only have `group_vars`. The commands only the
+  tree used (*Run Playbook with This Tag*, *Open Playbook*, *Open Env File*, *Refresh*)
+  are removed. The extension now activates on startup, for the status bar item.
+
 * **Playbooks run in a reused *Playbook Runner* terminal** instead of a new
   task terminal per run. The Python Environments extension typed
   `source .venv/bin/activate.fish` into new task terminals — into the vault

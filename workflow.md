@@ -428,6 +428,26 @@ tree without a reload.
     without moving the shell, the range variables for one command only, and a
     leading space to keep it out of history so ↑ cannot replay a range run.
 
+19. ✅ the sidebar is gone; the dashboard is the whole UI. Step 16 kept the tree
+    beside the dashboard "because it is the quick way in"; in use the dashboard
+    was where the work happened, and the tree became a second, narrower copy
+    of it. Everything the tree did moved over -- ▶ per playbook, a tag's ▷,
+    Edit/Create vault per service, Rekey vaults per environment, New service,
+    Re-run last, services with only group_vars -- and `src/tree.js`, the view
+    container, its welcome view and its menus were removed, with the four
+    commands only the tree used.
+
+    The way in is a status bar item (`$(run-all) Playbook Runner`, `· N
+    running` while playbooks run), so the extension now activates on
+    `onStartupFinished`: with no view there is nothing else to activate it.
+    VS Code cannot open an editor tab straight from an activity bar icon, and
+    a launcher-only side panel would have been a sidebar again.
+
+    The new actions follow the dashboard's rule from step 16: the message
+    names things, `src/model.js` resolves the names against the model, and
+    `src/dashboard.js` builds the command node from discovery's objects and
+    calls the same command the palette runs.
+
 ## 10. Verification
 
 Automated (`npm test`, node --test):
