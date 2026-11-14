@@ -2,7 +2,7 @@
  * Records every playbook run in the history (src/history.js) and reads back
  * what the range plugin reported.
  *
- * Editor surface: it listens to VS Code's task events and owns the
+ * Editor surface: runner.js tells it when a run ends, and it owns the
  * workspace-state key. What a result *means* -- passed, failed, cancelled, a
  * range edge that never matched -- is decided in history.js.
  */
@@ -13,9 +13,6 @@ const fs = require("fs");
 const vscode = require("vscode");
 
 const history = require("./history");
-
-/** The task type every playbook run is started with, see runner.js. */
-const TASK_TYPE = "playbook-runner";
 
 /**
  * The plugin's status file, if it wrote one. Read once, then removed.
@@ -57,12 +54,7 @@ class RunTracker {
     );
     void this.save();
 
-    this.disposables = [
-      this._onDidChange,
-      vscode.tasks.onDidEndTaskProcess((event) =>
-        this.end(event.execution.task.definition, event.exitCode),
-      ),
-    ];
+    this.disposables = [this._onDidChange];
   }
 
   /** @returns {import("./history").RunEntry[]} */
@@ -98,18 +90,12 @@ class RunTracker {
   }
 
   /**
-   * @param {vscode.TaskDefinition} definition
-   * @param {number | undefined} exitCode
+   * @param {string} id
+   * @param {number | undefined | null} exitCode  null: the result could not be tracked
    */
-  async end(definition, exitCode) {
-    if (definition.type !== TASK_TYPE || typeof definition.runId !== "string") {
-      return;
-    }
-    const id = definition.runId;
-    // Only a run this window started and still has running. A replay of an
-    // old task (VS Code's Rerun Last Task) or a terminal that outlived a
-    // reload must not overwrite a finished or "unknown" entry with a result
-    // that lacks the range verdict.
+  async end(id, exitCode) {
+    // Only a run this window started and still has running: a reload settles
+    // the rest as "unknown", and nothing may overwrite that afterwards.
     const before = this._history.find((entry) => entry.id === id);
     if (!before || before.status !== "running") {
       return;
@@ -143,4 +129,4 @@ class RunTracker {
   }
 }
 
-module.exports = { RunTracker, TASK_TYPE };
+module.exports = { RunTracker };

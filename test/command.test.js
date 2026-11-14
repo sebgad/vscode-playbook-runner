@@ -13,6 +13,7 @@ const {
   RANGE_STRATEGY,
   buildPlaybookArgs,
   buildPlaybookEnv,
+  buildTerminalCommand,
   buildVaultArgv,
   buildVaultRekeyArgv,
   describeRun,
@@ -435,5 +436,39 @@ describe("describeRun", () => {
     assert.equal(describeRun("p.yml", { fromTask: "A" }), "p.yml from «A»");
     assert.equal(describeRun("p.yml", { untilTask: "B" }), "p.yml until «B»");
     assert.equal(describeRun("p.yml", { fromTask: "A", untilTask: "B" }), "p.yml from «A» until «B»");
+  });
+});
+
+describe("buildTerminalCommand", () => {
+  it("runs in the workspace folder through env -C, with a leading space to stay out of shell history", () => {
+    assert.equal(
+      buildTerminalCommand({
+        cwd: "/repo",
+        command: "ansible-playbook",
+        argv: ["-i", "inventories/staging/hosts.ini", "playbooks/app/app.yml", "--ask-vault-password"],
+        env: {},
+      }),
+      " env -C /repo ansible-playbook -i inventories/staging/hosts.ini playbooks/app/app.yml --ask-vault-password",
+    );
+  });
+
+  it("quotes the folder, every env assignment and every argument, but not the command", () => {
+    assert.equal(
+      buildTerminalCommand({
+        cwd: "/home/me/my repo",
+        command: "uv run ansible-playbook",
+        argv: ["it's a test.yml", "--tags", "a,b"],
+        env: { PLAYBOOK_RUNNER_FROM_TASK: "r : it's [x]", ANSIBLE_STRATEGY: "playbook_runner_range" },
+      }),
+      " env -C '/home/me/my repo' 'PLAYBOOK_RUNNER_FROM_TASK=r : it'\\''s [x]' ANSIBLE_STRATEGY=playbook_runner_range" +
+        " uv run ansible-playbook 'it'\\''s a test.yml' --tags a,b",
+    );
+  });
+
+  it("refuses an env name that is not a plain identifier", () => {
+    assert.throws(
+      () => buildTerminalCommand({ cwd: "/r", command: "x", argv: [], env: { "A B": "1" } }),
+      /A B/,
+    );
   });
 });

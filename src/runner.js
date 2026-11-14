@@ -1,27 +1,31 @@
 /**
  * Executing the ansible commands.
  *
- * Two execution paths on purpose:
+ * Two kinds of terminal, on purpose:
  *
- *   playbooks -> vscode.Task, which brings Terminate Task, Re-run Last Task
- *                and the task terminal, and still has a real tty so
- *                --ask-vault-password and become prompts work.
- *   vaults    -> a terminal of their own, because `ansible-vault edit` spawns
- *                $EDITOR (nano, per ansible.cfg) and that wants a terminal it
- *                owns.
+ *   playbooks -> a "Playbook Runner" terminal per workspace folder, an
+ *                ordinary interactive shell that is reused run after run. The
+ *                command goes in through shell integration, which reports its
+ *                exit code for the run history; it is a real tty, so
+ *                --ask-vault-password, become and SSH prompts work, and Ctrl+C
+ *                stops a run. A runner terminal with a command still running
+ *                is never typed into -- a second one opens instead.
+ *   vaults    -> a terminal of their own running `$shell -c <command>`,
+ *                because `ansible-vault edit` spawns $EDITOR (nano, per
+ *                ansible.cfg) and wants a terminal it owns; it ends when the
+ *                command does.
  *
- * The vault terminal runs `$shell -c <command>` as its process rather than
- * being an interactive shell we type into. That way the terminal ends when the
- * command does -- so a second vault action opens a new one instead of sending
- * text into the `nano` the first one still has open -- while a configured
- * command that is a wrapper ("uv run ansible-vault") keeps working and PATH is
- * resolved the way the user's shell resolves it. POSIX `-c` is assumed; ansible
- * is not a Windows tool.
+ * Every terminal here is created with `hideFromUser` and shown right after.
+ * The Python Environments extension types `source .venv/bin/activate.fish`
+ * into each new terminal it sees for a folder with a venv -- into a password
+ * prompt or nano, if that is what is running -- and the one kind of terminal
+ * it leaves alone is one created hidden. Playbooks used to run as a
+ * vscode.Task, whose terminal it only sometimes recognised in time.
  *
  * Both run with the workspace folder as cwd: ansible.cfg is only picked up
  * from the working directory, and its roles_path is relative.
  *
- * The argument vectors themselves are built in ./command.js.
+ * The argument vectors and the command line are built in ./command.js.
  */
 
 "use strict";
@@ -39,60 +43,159 @@ const VAULT_TERMINAL = "Ansible Vault";
 /** @type {Set<vscode.Terminal>} */
 const vaultTerminals = new Set();
 
+const RUNNER_TERMINAL = "Playbook Runner";
+
+/** How long a new runner terminal gets to bring up shell integration. */
+const SHELL_INTEGRATION_TIMEOUT_MS = 5000;
+
 /**
- * Arguments are handed to the shell strongly quoted -- a playbook called
- * `it's a test.yml` is a filename, never syntax. The command itself is left
- * alone so that a wrapper still works, which is why it is a `machine` scope
- * setting a workspace cannot set.
+ * The runner terminals: which folder each runs in, and how many commands are
+ * running in it right now (ours, or one typed by hand).
  *
- * @param {string[]} args
- * @returns {vscode.ShellQuotedString[]}
+ * @type {Map<vscode.Terminal, { folder: string, busy: number, reusable: boolean }>}
  */
-function quoteArgs(args) {
-  return args.map((value) => ({ value, quoting: vscode.ShellQuoting.Strong }));
+const runnerTerminals = new Map();
+
+/** @type {vscode.Disposable[]} */
+const listeners = [];
+
+function listen() {
+  if (listeners.length) {
+    return;
+  }
+  listeners.push(
+    vscode.window.onDidStartTerminalShellExecution((event) => {
+      const info = runnerTerminals.get(event.terminal);
+      if (info) {
+        info.busy += 1;
+      }
+    }),
+    vscode.window.onDidEndTerminalShellExecution((event) => {
+      const info = runnerTerminals.get(event.terminal);
+      if (info) {
+        info.busy = Math.max(0, info.busy - 1);
+      }
+    }),
+    vscode.window.onDidCloseTerminal((terminal) => {
+      runnerTerminals.delete(terminal);
+      vaultTerminals.delete(terminal);
+    }),
+  );
 }
 
 /**
+ * An idle runner terminal for this folder, or a new one. A new one is created
+ * hidden and then shown: see the header for why.
+ *
+ * @param {vscode.WorkspaceFolder} folder
+ * @returns {vscode.Terminal}
+ */
+function runnerTerminalFor(folder) {
+  listen();
+  const root = folder.uri.fsPath;
+  for (const [terminal, info] of runnerTerminals) {
+    if (!terminal.exitStatus && info.folder === root && info.reusable && info.busy === 0) {
+      return terminal;
+    }
+  }
+  const open = [...runnerTerminals.values()].filter((info) => info.folder === root).length;
+  const terminal = vscode.window.createTerminal({
+    name: open ? `${RUNNER_TERMINAL} (${open + 1})` : RUNNER_TERMINAL,
+    cwd: root,
+    hideFromUser: true,
+    iconPath: new vscode.ThemeIcon("run-all"),
+  });
+  runnerTerminals.set(terminal, { folder: root, busy: 0, reusable: true });
+  return terminal;
+}
+
+/**
+ * The terminal's shell integration, waiting a few seconds for a new one.
+ *
+ * @param {vscode.Terminal} terminal
+ * @returns {Promise<vscode.TerminalShellIntegration | undefined>}
+ */
+function shellIntegrationOf(terminal) {
+  if (terminal.shellIntegration) {
+    return Promise.resolve(terminal.shellIntegration);
+  }
+  return new Promise((resolve) => {
+    const subscription = vscode.window.onDidChangeTerminalShellIntegration((event) => {
+      if (event.terminal === terminal) {
+        clearTimeout(timer);
+        subscription.dispose();
+        resolve(event.shellIntegration);
+      }
+    });
+    const timer = setTimeout(() => {
+      subscription.dispose();
+      resolve(terminal.shellIntegration);
+    }, SHELL_INTEGRATION_TIMEOUT_MS);
+  });
+}
+
+/**
+ * Run one playbook in a runner terminal.
+ *
+ * `env` is added for this one command -- the task-range variables from
+ * command.buildPlaybookEnv -- through `env` on the command line, never
+ * exported into the shell.
+ *
+ * Resolves once the command has been handed to the shell. `finished` then
+ * resolves with its exit code (undefined if the shell could not say), or is
+ * null when the terminal has no shell integration and the result cannot be
+ * tracked at all.
+ *
  * @param {vscode.WorkspaceFolder} folder
  * @param {import("./defaults").Settings} settings
- * `env` is added to the task's environment -- the task-range variables from
- * command.buildPlaybookEnv, never anything put into the command string --
- * and `runId` goes into the task definition so the run's end can be matched
- * back to its history entry.
- *
- * @param {{ environment: import("./discovery").Environment, playbookFile: string, options?: command.RunOptions, env?: Record<string, string>, runId: string }} request
- * @returns {Thenable<vscode.TaskExecution>}
+ * @param {{ environment: import("./discovery").Environment, playbookFile: string, options?: command.RunOptions, env?: Record<string, string> }} request
+ * @returns {Promise<{ finished: Promise<number | undefined> | null }>}
  */
-function runPlaybook(folder, settings, request) {
+async function runPlaybook(folder, settings, request) {
   const root = folder.uri.fsPath;
-  const playbook = path.relative(root, request.playbookFile);
   // The same argv the dashboard previews -- see model.playbookArgv.
-  const args = playbookArgv(root, settings, request.environment, request.playbookFile, request.options || {});
+  const argv = playbookArgv(root, settings, request.environment, request.playbookFile, request.options || {});
+  const line = command.buildTerminalCommand({
+    cwd: root,
+    command: settings.ansiblePlaybookCommand,
+    argv,
+    env: request.env || {},
+  });
 
-  const execution = new vscode.ShellExecution(
-    settings.ansiblePlaybookCommand,
-    quoteArgs(args),
-    request.env && Object.keys(request.env).length ? { cwd: root, env: request.env } : { cwd: root },
-  );
+  const terminal = runnerTerminalFor(folder);
+  const info = runnerTerminals.get(terminal);
+  if (info) {
+    // Claimed before the wait, so a second run started meanwhile opens its
+    // own terminal instead of typing into this one.
+    info.busy += 1;
+  }
+  terminal.show(true);
+  const integration = await shellIntegrationOf(terminal);
+  if (info) {
+    info.busy = Math.max(0, info.busy - 1);
+  }
 
-  const label = command.playbookLabel(root, settings, request.playbookFile);
-  const task = new vscode.Task(
-    { type: "playbook-runner", environment: request.environment.name, playbook, runId: request.runId },
-    folder,
-    `${request.environment.name}: ${label}`,
-    "Playbook Runner",
-    execution,
-  );
+  if (!integration) {
+    // No way to know when it ends, so no way to know when the terminal is
+    // free again: it is not reused.
+    if (info) {
+      info.reusable = false;
+    }
+    terminal.sendText(line, true);
+    return { finished: null };
+  }
 
-  task.presentationOptions = {
-    reveal: vscode.TaskRevealKind.Always,
-    panel: vscode.TaskPanelKind.New,
-    clear: true,
-    echo: true,
-    focus: false,
-  };
-
-  return vscode.tasks.executeTask(task);
+  const execution = integration.executeCommand(line);
+  /** @type {Promise<number | undefined>} */
+  const finished = new Promise((resolve) => {
+    const subscription = vscode.window.onDidEndTerminalShellExecution((event) => {
+      if (event.execution === execution) {
+        subscription.dispose();
+        resolve(event.exitCode);
+      }
+    });
+  });
+  return { finished };
 }
 
 /** The shell used to run a vault command, in the order VS Code itself picks. */
@@ -127,12 +230,16 @@ function pruneFinished() {
 function runInTerminal(folder, argv, name = VAULT_TERMINAL) {
   pruneFinished();
 
+  listen();
   const terminal = vscode.window.createTerminal({
     name,
     cwd: folder.uri.fsPath,
     shellPath: shellPath(),
     shellArgs: ["-c", argv.map(command.shellQuote).join(" ")],
     iconPath: new vscode.ThemeIcon("lock"),
+    // Hidden at creation so nothing types into ansible-vault's password
+    // prompt or into nano -- see the header. Shown just below.
+    hideFromUser: true,
   });
   vaultTerminals.add(terminal);
   terminal.show();
@@ -188,14 +295,18 @@ function runVaultRekey(folder, settings, request) {
 function dispose() {
   pruneFinished();
   vaultTerminals.clear();
+  runnerTerminals.clear();
+  for (const listener of listeners.splice(0)) {
+    listener.dispose();
+  }
 }
 
 module.exports = {
+  RUNNER_TERMINAL,
   VAULT_TERMINAL,
   buildPlaybookArgs: command.buildPlaybookArgs,
   dispose,
   playbookLabel: command.playbookLabel,
-  quoteArgs,
   runInTerminal,
   runPlaybook,
   runVaultCommand,

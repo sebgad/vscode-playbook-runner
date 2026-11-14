@@ -261,7 +261,17 @@ async function startPlaybookRun(context, tracker, run) {
   );
 
   try {
-    await runner.runPlaybook(folder, settings, { environment, playbookFile, options, env, runId });
+    const { finished } = await runner.runPlaybook(folder, settings, {
+      environment,
+      playbookFile,
+      options,
+      env,
+    });
+    if (finished) {
+      void finished.then((exitCode) => tracker.end(runId, exitCode));
+    } else {
+      await tracker.end(runId, null);
+    }
   } catch (err) {
     await tracker.abandon(runId);
     vscode.window.showErrorMessage(`Playbook Runner: could not run ${label}: ${messageOf(err)}`);

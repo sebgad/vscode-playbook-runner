@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+* **Playbooks run in a reused *Playbook Runner* terminal** instead of a new
+  task terminal per run. The Python Environments extension typed
+  `source .venv/bin/activate.fish` into new task terminals — into the vault
+  password prompt, crashing the run — whenever it failed to recognise them as
+  tasks in time. Every terminal the extension opens (runner and vault) is now
+  created hidden and then shown, which that extension leaves alone. Exit codes
+  still reach the run history through shell integration; *Terminate Task* is
+  replaced by Ctrl+C. Requires VS Code 1.93.
+
 * **Dashboard:** *Open Dashboard* opens an editor tab with environments,
   services and their last run, playbooks that expand into plays and tasks, and
   a run bar showing the exact command line before *Run*.

@@ -140,7 +140,10 @@ function rangeVerdict(options, rangeStatus) {
 /**
  * @param {RunEntry[]} history
  * @param {string} id
- * @param {{ exitCode: number | undefined, endedAt: number, rangeStatus: RangeStatus | null }} result
+ * `exitCode` is undefined for a run that was stopped, null for one whose
+ * result could not be tracked (a terminal without shell integration).
+ *
+ * @param {{ exitCode: number | undefined | null, endedAt: number, rangeStatus: RangeStatus | null }} result
  * @returns {RunEntry[]}
  */
 function finishRun(history, id, result) {
@@ -153,6 +156,10 @@ function finishRun(history, id, result) {
     }
     /** @type {RunEntry} */
     const finished = { ...entry, endedAt: result.endedAt };
+    if (result.exitCode === null) {
+      finished.status = "unknown";
+      return finished;
+    }
     if (result.exitCode === undefined) {
       finished.status = "cancelled";
       return finished;

@@ -131,9 +131,9 @@ start, a playbook that sets `strategy:` itself (which would bypass the
 plugin), or one with a `serial:` play. If an edge still never matched during a
 run, the run counts as failed and says which one.
 
-A range run can only be started from Playbook Runner. VS Code's own *Tasks:
-Rerun Last Task* would replay it without those checks, so the plugin refuses a
-replay before any task runs; use *Playbook Runner: Re-run Last* instead.
+A range run can only be started from Playbook Runner. Replaying its command
+line by hand would skip those checks, so the plugin refuses a replay before any
+task runs; use *Playbook Runner: Re-run Last* instead.
 
 The plugin overrides part of ansible-core's `linear` strategy, so an
 ansible-core upgrade can break it. It refuses to run on any ansible-core other
@@ -242,15 +242,27 @@ ansible-vault edit inventories/production/group_vars/<group>/vault.yml
 
 | | Mechanism | Why |
 | --- | --- | --- |
-| Playbooks | `vscode.Task` (`ShellExecution`) | Gives *Terminate Task*, *Re-run Last Task* and the task terminal. Still a real tty, so `--ask-vault-password`, `become` and SSH passphrase prompts work. |
+| Playbooks | A reused `Playbook Runner` terminal per workspace folder; the command goes in through shell integration | A real tty, so `--ask-vault-password`, `become` and SSH passphrase prompts work; Ctrl+C stops a run; shell integration reports the exit code for the run history. A runner terminal with a command still running is never typed into — a second one opens. |
 | Vaults | A terminal per run, named `Ansible Vault: <env>` | `ansible-vault edit` spawns `$EDITOR` (nano, per `ansible.cfg`) and wants a terminal it owns. |
+
+Every one of these terminals is created hidden and shown right after. The
+Python Environments extension (`ms-python.vscode-python-envs`) types
+`source .venv/bin/activate.fish` into each new terminal in a folder with a
+venv, and a hidden-at-creation terminal is the one kind it leaves alone.
+Playbooks used to run as VS Code tasks, whose terminals it only sometimes
+recognised in time — the activation line then landed in the vault password
+prompt. Without shell integration in your shell the command is still sent, but
+its result shows as *unknown* in the history.
 
 Both run with the workspace folder as the working directory, because
 `ansible.cfg` is only read from the cwd and its `roles_path` is relative.
 
-A task-range run adds environment variables to its task — the range plugin's
-`ANSIBLE_STRATEGY*` and `PLAYBOOK_RUNNER_*` — never anything to the command
-string. Every other run is unchanged.
+The line typed into the runner terminal is
+` env -C <workspace folder> [range variables] ansible-playbook <args>`: `env -C`
+runs it in the workspace folder without moving your shell (GNU coreutils), a
+task-range run's `ANSIBLE_STRATEGY*` and `PLAYBOOK_RUNNER_*` variables apply
+to that one command only, and the leading space keeps it out of bash and fish
+history.
 
 Arguments are handed to the shell strongly quoted, so a path is a path and
 never syntax. The vault terminal runs `$shell -c <command>` as its process

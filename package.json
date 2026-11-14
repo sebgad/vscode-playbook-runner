@@ -6,7 +6,7 @@
   "publisher": "sebgad",
   "private": true,
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.93.0"
   },
   "categories": [
     "Other"
@@ -29,7 +29,7 @@
   "devDependencies": {
     "@eslint/js": "^9.17.0",
     "@types/node": "^22.10.2",
-    "@types/vscode": "^1.75.0",
+    "@types/vscode": "^1.93.0",
     "@vscode/codicons": "0.0.46-24",
     "@vscode/vsce": "^3.2.1",
     "eslint": "^9.17.0",
@@ -72,29 +72,6 @@
         "view": "playbookRunnerExplorer",
         "contents": "No Ansible environments found. Playbook Runner looks for an inventory file (`playbookRunner.inventoryFile`) in each directory under `playbookRunner.inventoriesDir`.\n[Open Settings](command:workbench.action.openSettings?%5B%22playbookRunner%22%5D)\n[Open Dashboard](command:playbookRunner.openDashboard)",
         "when": "playbookRunner.noEnvironments"
-      }
-    ],
-    "taskDefinitions": [
-      {
-        "type": "playbook-runner",
-        "required": [
-          "environment",
-          "playbook"
-        ],
-        "properties": {
-          "environment": {
-            "type": "string",
-            "description": "Name of the inventory environment the playbook runs against."
-          },
-          "playbook": {
-            "type": "string",
-            "description": "Playbook path, relative to the workspace folder."
-          },
-          "runId": {
-            "type": "string",
-            "description": "Identifies one run, so its result can be recorded in the run history."
-          }
-        }
       }
     ],
     "commands": [

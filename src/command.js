@@ -304,6 +304,30 @@ function shellQuote(value) {
 }
 
 /**
+ * The line typed into the runner terminal for one playbook run.
+ *
+ * `env -C <folder>` runs it in the workspace folder -- ansible.cfg is only read
+ * from the cwd -- without moving the interactive shell, and carries the
+ * task-range variables without exporting them into that shell. The leading
+ * space keeps the line out of bash and fish history, so pressing ↑ cannot
+ * replay a range run past the extension's checks. Everything is quoted except
+ * the configured command, which may be a wrapper such as
+ * `uv run ansible-playbook` and is a `machine` setting a workspace cannot set.
+ *
+ * @param {{ cwd: string, command: string, argv: string[], env: Record<string, string> }} spec
+ * @returns {string}
+ */
+function buildTerminalCommand(spec) {
+  const assignments = Object.entries(spec.env).map(([name, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      throw new Error(`not an environment variable name: ${name}`);
+    }
+    return shellQuote(`${name}=${value}`);
+  });
+  return ` ${["env", "-C", shellQuote(spec.cwd), ...assignments, spec.command, ...spec.argv.map(shellQuote)].join(" ")}`;
+}
+
+/**
  * A short label for a playbook, e.g. "dns_servers/setup-bind9.yml".
  *
  * @param {string} root
@@ -322,6 +346,7 @@ module.exports = {
   RANGE_STRATEGY,
   buildPlaybookArgs,
   buildPlaybookEnv,
+  buildTerminalCommand,
   buildVaultArgv,
   buildVaultRekeyArgv,
   describeRun,

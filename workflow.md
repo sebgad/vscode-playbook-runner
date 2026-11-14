@@ -398,6 +398,36 @@ tree without a reload.
     exit code from the last play and gives a strategy no hook after it, which
     is why the verdict travels by file rather than by exit code.
 
+18. ✅ playbooks run in a reused terminal, not as a `vscode.Task` -- a
+    reversal of the "Two execution paths" choice in step 5, for one reason.
+
+    The Python Environments extension (`ms-python.vscode-python-envs`, default
+    `autoActivationType: "command"`) types `source .venv/bin/activate.fish`
+    into every new terminal of a folder with a venv. It means to skip task
+    terminals, but recognises one by looking it up in
+    `tasks.taskExecutions[].terminal`, which is not set yet when the terminal
+    opens -- so sometimes it typed into the task, and `--ask-vault-password`
+    read the activate line as the passphrase. Its log showed the sends as
+    "(unverified)". The vault terminal was never recognised at all.
+
+    The one terminal that extension always leaves alone is one created with
+    `hideFromUser` (its `shouldSkipTerminalActivation`). A task cannot be
+    created that way; a terminal can, and `show()` right after makes it an
+    ordinary visible terminal. So playbooks now run in a "Playbook Runner"
+    terminal per folder, reused while idle, and the vault terminal is created
+    the same way.
+
+    What was given up: *Terminate Task* (Ctrl+C does it) and VS Code's
+    *Rerun Last Task* (*Playbook Runner: Re-run Last* remains, and goes
+    through the checks). What was kept: the exit code, through shell
+    integration's `executeCommand` and `onDidEndTerminalShellExecution`; a
+    shell without shell integration still runs the command, and the run shows
+    as *unknown*. A runner terminal with anything running in it is never typed
+    into -- that would be the same bug -- so a second one opens. The command
+    line is ` env -C <folder> [range env] <command> <args>`: the folder
+    without moving the shell, the range variables for one command only, and a
+    leading space to keep it out of history so ↑ cannot replay a range run.
+
 ## 10. Verification
 
 Automated (`npm test`, node --test):

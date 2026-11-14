@@ -105,6 +105,12 @@ describe("finishRun", () => {
   const finish = (result, base = history) =>
     /** @type {import("../src/history").RunEntry} */ (finishRun(base, "a", result)[0]);
 
+  it("records a run whose exit code could not be tracked as unknown", () => {
+    const result = finish({ exitCode: null, endedAt: 5, rangeStatus: null });
+    assert.equal(result.status, "unknown");
+    assert.equal(result.exitCode, undefined);
+  });
+
   it("maps exit codes to passed, failed and cancelled", () => {
     assert.equal(finish({ exitCode: 0, endedAt: 5, rangeStatus: null }).status, "passed");
     assert.equal(finish({ exitCode: 2, endedAt: 5, rangeStatus: null }).status, "failed");
