@@ -122,6 +122,29 @@
     return el;
   }
 
+  /**
+   * The runner figure ("run" from Tabler Icons, MIT), inline so it takes the
+   * theme's text colour -- an <img> of the SVG would not.
+   */
+  function runnerFigure() {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("class", "runner-figure");
+    svg.setAttribute("aria-hidden", "true");
+    for (const d of [
+      "M13 4m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0",
+      "M4 17l5 1l.75 -1.5",
+      "M15 21l0 -4l-4 -3l1 -6",
+      "M7 12l0 -3l5 -1l3 3l3 1",
+    ]) {
+      const path = document.createElementNS(ns, "path");
+      path.setAttribute("d", d);
+      svg.append(path);
+    }
+    return svg;
+  }
+
   /** @param {string} name @param {string} [extra] */
   function icon(name, extra = "") {
     return h("span", { class: `codicon codicon-${name} ${extra}`, "aria-hidden": "true" });
@@ -662,7 +685,7 @@
     return h(
       "header",
       { class: "topbar" },
-      h("h1", null, icon("run-all"), "Playbook Runner"),
+      h("h1", null, runnerFigure(), "Playbook Runner"),
       tabs(),
       folderSelect(folder),
       h("span", { class: "spacer" }),
@@ -727,6 +750,31 @@
     );
   }
 
+  /**
+   * What a service row leads with: the result of its newest run, or what kind
+   * of service it is when nothing has run yet.
+   *
+   * @param {any} service @param {any} newest
+   */
+  function serviceIcon(service, newest) {
+    /** @type {Record<string, [string, string, string]>} status -> codicon, modifier, label */
+    const byStatus = {
+      running: ["loading", "codicon-modifier-spin", "running"],
+      passed: ["pass-filled", "", "last run passed"],
+      failed: ["error", "", "last run failed"],
+      cancelled: ["circle-slash", "", "last run cancelled"],
+      unknown: ["question", "", "result of the last run unknown"],
+    };
+    if (newest) {
+      const [name, extra, label] = byStatus[newest.status] || byStatus.unknown;
+      return h("span", { class: `service-icon ${newest.status}`, title: label }, icon(name, extra));
+    }
+    if (!service.playbooks.length) {
+      return h("span", { class: "service-icon vars", title: "variables only, no playbooks" }, icon("symbol-variable"));
+    }
+    return h("span", { class: "service-icon never", title: "never run here" }, icon("circle-large-outline"));
+  }
+
   /** @param {any} environment */
   function servicesPane(environment) {
     const services = visibleServices(environment);
@@ -769,13 +817,13 @@
                       changed();
                     },
                   },
-                  h("span", { class: `dot ${newest ? newest.status : ""}`, title: newest ? newest.status : "never run" }),
+                  serviceIcon(service, newest),
                   h("span", { class: "name" }, service.name),
-                  h(
-                    "span",
-                    { class: "when" },
-                    newest ? ago(newest.endedAt || newest.startedAt) : service.playbooks.length ? "" : "vars",
-                  ),
+                  newest
+                    ? h("span", { class: "when" }, newest.status === "running" ? "running…" : ago(newest.endedAt || newest.startedAt))
+                    : service.playbooks.length > 1
+                      ? h("span", { class: "count", title: `${service.playbooks.length} playbooks` }, String(service.playbooks.length))
+                      : null,
                 ),
               );
             })
@@ -1290,7 +1338,7 @@
       // Reachable whatever the folder looks like: a wrong inventoriesDir is
       // exactly when the settings are needed.
       return [
-        h("header", { class: "topbar" }, h("h1", null, icon("run-all"), "Playbook Runner"), tabs()),
+        h("header", { class: "topbar" }, h("h1", null, runnerFigure(), "Playbook Runner"), tabs()),
         h("div"),
         settingsPane(),
         h("div"),

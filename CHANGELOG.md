@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+* The dashboard's service list leads each service with what happened to it —
+  ✓ passed, ✗ failed, a spinner while running, ⊘ cancelled, ○ never run, and a
+  variables icon for services without playbooks — instead of a coloured dot,
+  and marks the selected one with an accent bar. The runner figure heads the
+  dashboard in the theme's text colour, and the editor tab has a light and a
+  dark version of it, so it no longer disappears in dark themes.
+
 * **Settings tab** in the dashboard: every `playbookRunner.*` setting with its
   description, where its value comes from, an editor that fits its type, and
   *Reset*. Saves to the workspace's `.vscode/settings.json` (or *Move to User

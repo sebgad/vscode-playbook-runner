@@ -188,16 +188,16 @@ input[type="text"]::placeholder {
 
 .service {
   width: 100%;
-  border: none;
+  border: 1px solid transparent;
+  border-left: 2px solid transparent;
   background: transparent;
   text-align: left;
-  padding: 4px 12px;
+  padding: 5px 12px 5px 10px;
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  border: 1px solid transparent;
 }
 
 .service:hover {
@@ -208,6 +208,7 @@ input[type="text"]::placeholder {
   background: var(--vscode-list-activeSelectionBackground);
   color: var(--vscode-list-activeSelectionForeground);
   border-color: var(--hc-border);
+  border-left-color: var(--vscode-focusBorder);
 }
 
 .service .name {
@@ -226,28 +227,9 @@ input[type="text"]::placeholder {
   opacity: 0.85;
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  border: 1px solid var(--muted);
-}
 
-.dot.passed {
-  background: var(--passed);
-  border-color: var(--passed);
-}
 
-.dot.failed {
-  background: var(--failed);
-  border-color: var(--failed);
-}
 
-.dot.running {
-  background: var(--running);
-  border-color: var(--running);
-  animation: pulse 1.2s ease-in-out infinite;
-}
 
 @keyframes pulse {
   50% {
@@ -256,7 +238,6 @@ input[type="text"]::placeholder {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dot.running,
   .codicon-modifier-spin {
     animation: none;
   }
@@ -836,4 +817,58 @@ input[type="text"]::placeholder {
   display: flex;
   gap: 16px;
   flex-wrap: wrap;
+}
+
+/* ── Service list status icons and the runner figure ─────────────────── */
+
+.service-icon {
+  display: inline-flex;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.service-icon .codicon {
+  font-size: 14px;
+}
+
+.service-icon.passed {
+  color: var(--passed);
+}
+
+.service-icon.failed {
+  color: var(--failed);
+}
+
+.service-icon.running {
+  color: var(--running);
+}
+
+.service-icon.never {
+  opacity: 0.55;
+}
+
+.service[aria-selected="true"] .service-icon.never,
+.service[aria-selected="true"] .service-icon.vars {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.service .count {
+  font-size: 0.8em;
+  min-width: 18px;
+  text-align: center;
+  border-radius: 9px;
+  padding: 0 5px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+}
+
+.runner-figure {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }

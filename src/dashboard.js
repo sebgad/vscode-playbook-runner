@@ -176,7 +176,12 @@ class DashboardPanel {
     this.model = { folders: [] };
 
     const media = vscode.Uri.joinPath(context.extensionUri, "media");
-    panel.iconPath = vscode.Uri.joinPath(media, "runner.svg");
+    // An editor tab draws its icon as an image, where currentColor is black;
+    // so one file per theme, in VS Code's own icon greys.
+    panel.iconPath = {
+      light: vscode.Uri.joinPath(media, "runner-light.svg"),
+      dark: vscode.Uri.joinPath(media, "runner-dark.svg"),
+    };
     panel.webview.html = this.html(panel.webview, media);
 
     this.disposables = [
