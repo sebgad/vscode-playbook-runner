@@ -552,4 +552,83 @@ describe("group rename and delete plans", () => {
       removeFixture(root);
     }
   });
+
+  describe("fix round 1", () => {
+    const WITH_MANUAL = `${HOSTS}\n${MANUAL_BEGIN}\n[hand:children]\npodman_servers\n# podman_servers in a comment\n${MANUAL_END}\n`;
+
+    it("renames and deletes a service", () => {
+      const { root, environment } = setup(HOSTS, ["inventories/production/group_vars/immich/env.yml"]);
+      try {
+        const plan = planGroupRename(root, DEFAULTS, environment, HOSTS, "immich", "photos");
+        assert.match(plan.text, /\[photos:children\]/);
+        assert.doesNotMatch(plan.text, /immich/);
+        assert.ok(plan.groupVarsFrom && plan.groupVarsFrom.endsWith("immich"));
+        const del = planGroupDelete(root, DEFAULTS, environment, HOSTS, "immich");
+        assert.doesNotMatch(del.text, /immich/);
+        const parent = `${HOSTS}\n[all_apps:children]\nimmich\n`;
+        const nested = planGroupRename(root, DEFAULTS, environment, parent, "immich", "photos");
+        assert.match(nested.text, /\[all_apps:children\]\nphotos\n/);
+        assert.deepEqual(nested.services, ["all_apps"]);
+        const gone = planGroupDelete(root, DEFAULTS, environment, parent, "immich");
+        assert.deepEqual(gone.services, ["all_apps"]);
+        assert.deepEqual(gone.emptied, ["all_apps"]);
+      } finally {
+        removeFixture(root);
+      }
+    });
+
+    it("reports manual references and keeps manual blocks in place", () => {
+      const { root, environment } = setup(WITH_MANUAL);
+      try {
+        const plan = planGroupRename(root, DEFAULTS, environment, WITH_MANUAL, "podman_servers", "podman");
+        assert.equal(plan.manualReferences.length, 1);
+        assert.ok(plan.text.includes("[hand:children]\npodman_servers\n"));
+        const del = planGroupDelete(root, DEFAULTS, environment, WITH_MANUAL, "podman_servers");
+        assert.equal(del.manualReferences.length, 1);
+        const anchored = `[podman_servers]\nbox\n\n${MANUAL_BEGIN}\n# x\n${MANUAL_END}\n\n[nfs_servers]\nnfs\n`;
+        const moved = planGroupRename(root, DEFAULTS, environment, anchored, "podman_servers", "podman");
+        assert.ok(moved.text.indexOf("[podman]") < moved.text.indexOf(MANUAL_BEGIN));
+        assert.ok(moved.text.indexOf(MANUAL_BEGIN) < moved.text.indexOf("[nfs_servers]"));
+      } finally {
+        removeFixture(root);
+      }
+    });
+
+    it("refuses an unchanged name and a file-form group_vars target, and reports file-form sources", () => {
+      const { root, environment } = setup(HOSTS, [
+        "inventories/production/group_vars/taken.yaml",
+        "inventories/production/group_vars/podman_servers.yml",
+      ]);
+      try {
+        assert.throws(() => planGroupRename(root, DEFAULTS, environment, HOSTS, "nfs_servers", "nfs_servers"), /unchanged/);
+        assert.throws(() => planGroupRename(root, DEFAULTS, environment, HOSTS, "nfs_servers", "taken"));
+        const plan = planGroupRename(root, DEFAULTS, environment, HOSTS, "podman_servers", "podman");
+        assert.deepEqual(plan.groupVarsFiles, [path.join(environment.groupVarsDir, "podman_servers.yml")]);
+        assert.equal(planGroupDelete(root, DEFAULTS, environment, HOSTS, "podman_servers").groupVarsFiles.length, 1);
+      } finally {
+        removeFixture(root);
+      }
+    });
+
+    it("apply refuses when the target appeared after planning, writing nothing", () => {
+      const { root, environment } = setup(HOSTS);
+      try {
+        const plan = planGroupRename(root, DEFAULTS, environment, HOSTS, "podman_servers", "podman");
+        fs.mkdirSync(plan.groupVarsTo, { recursive: true });
+        assert.throws(() => applyGroupRename(plan, environment.inventory));
+        assert.equal(fs.readFileSync(environment.inventory, "utf8"), HOSTS);
+      } finally {
+        removeFixture(root);
+      }
+    });
+
+    it("reads a hosts list with brackets and a trailing comment", () => {
+      const root = makeFixture([["playbooks/a.yml", "- hosts: [a, immich]  # why\n"]]);
+      try {
+        assert.equal(playbooksNamingGroup(root, DEFAULTS, "immich").length, 1);
+      } finally {
+        removeFixture(root);
+      }
+    });
+  });
 });

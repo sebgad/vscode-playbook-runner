@@ -1,7 +1,8 @@
 /**
  * Parsing and writing the INI inventory (`hosts.ini`) of one environment.
  *
- * Pure: no `vscode`, no disk. The Inventory tab edits the model this module
+ * Never requires `vscode`. Parsing and serializing are pure; only the group
+ * rename/delete plans and `applyGroupRename` touch the disk. The Inventory tab edits the model this module
  * produces and writes `serializeInventory` of it back. Comments outside
  * "manual blocks" are not part of the model and are dropped on write (the
  * parser says so in `warnings`); manual blocks are carried through verbatim.
@@ -782,7 +783,7 @@ function newInventoryText() {
 
 /**
  * Every playbook (path relative to `root`, sorted) with a `hosts:` line that
- * names `group`, alone or in a pattern such as `a:immich` or `!immich`.
+ * names `group`, alone or in a pattern such as `a:immich`, `!immich` or a list.
  *
  * @param {string} root
  * @param {import("./defaults").Settings} settings
@@ -805,8 +806,10 @@ function playbooksNamingGroup(root, settings, group) {
         if (!match || match[1] === undefined) {
           return false;
         }
-        const value = match[1].replace(/^(["'])(.*)\1$/, "$2");
-        return value.split(/[:,]/).some((part) => part.trim().replace(/^[&!]+/, "") === group);
+        const value = match[1].replace(/\s+#.*$/, "").trim().replace(/^(["'])(.*)\1$/, "$2");
+        return value
+          .split(/[:,]/)
+          .some((part) => part.trim().replace(/^[&!]+/, "").replace(/^\[+|\]+$/g, "").replace(/^(["'])(.*)\1$/, "$2").trim() === group);
       });
       if (names) {
         found.push(path.relative(root, playbook.file));
@@ -824,10 +827,55 @@ function playbooksNamingGroup(root, settings, group) {
  * @property {string} text New inventory text.
  * @property {string | null} groupVarsFrom group_vars directory to move, if there is one.
  * @property {string} groupVarsTo
+ * @property {string[]} groupVarsFiles File-form group vars (`<name>.yml` ...); reported, not moved.
  * @property {string[]} services Services that list the group as a child.
  * @property {string[]} playbooks Playbooks naming the group (they are not edited).
  * @property {string[]} otherEnvironments Other environments that have a group of that name.
+ * @property {number[]} manualReferences Lines of manual blocks that mention the group; left untouched.
  */
+
+/**
+ * @typedef {object} GroupDeletePlan
+ * @property {string} environment
+ * @property {string} name
+ * @property {string} text New inventory text.
+ * @property {string | null} groupVars group_vars directory of the group, if it exists (left on disk).
+ * @property {string[]} groupVarsFiles File-form group vars; left on disk.
+ * @property {string[]} services Services that listed the group.
+ * @property {string[]} emptied Those services that end up with no children and no hosts.
+ * @property {string[]} playbooks Playbooks naming the group.
+ * @property {number[]} manualReferences Lines of manual blocks that mention the group; left untouched.
+ */
+
+const GROUP_VARS_FILE_EXTENSIONS = [".yml", ".yaml", ".json"];
+
+/**
+ * @param {string} dir
+ * @param {string} name
+ * @returns {string[]}
+ */
+function groupVarsFilesOf(dir, name) {
+  return GROUP_VARS_FILE_EXTENSIONS.map((extension) => path.join(dir, `${name}${extension}`)).filter((file) =>
+    fs.existsSync(file),
+  );
+}
+
+/**
+ * @param {Inventory} inventory
+ * @param {string} name
+ * @returns {number[]}
+ */
+function manualReferencesTo(inventory, name) {
+  const pattern = new RegExp(`(^|[\\s\\[:,])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[\\s\\]:,=])`);
+  return inventory.manual
+    .filter((block) =>
+      block.text.split(/\r?\n/).some((line) => {
+        const trimmed = line.trim();
+        return !trimmed.startsWith("#") && !trimmed.startsWith(";") && pattern.test(line);
+      }),
+    )
+    .map((block) => block.line);
+}
 
 /**
  * @param {string} diskText
@@ -843,9 +891,9 @@ function parseForGroupChange(diskText, name, verb) {
   if (inventory.manualGroups.includes(name)) {
     throw new Error(`"${name}" is defined in a manual block; edit the text yourself to ${verb} it.`);
   }
-  const group = inventory.serverGroups.find((item) => item.name === name);
+  const group = [...inventory.serverGroups, ...inventory.services].find((item) => item.name === name);
   if (!group) {
-    throw new Error(`"${name}" is not a server group of this inventory.`);
+    throw new Error(`"${name}" is not a group of this inventory.`);
   }
   if (group.readOnly) {
     throw new Error(`"${name}" cannot be edited here; edit the inventory text to ${verb} it.`);
@@ -863,6 +911,9 @@ function parseForGroupChange(diskText, name, verb) {
  * @returns {GroupRenamePlan}
  */
 function planGroupRename(root, settings, environment, diskText, from, to) {
+  if (from === to) {
+    throw new Error("The name is unchanged.");
+  }
   const inventory = parseForGroupChange(diskText, from, "rename");
   if (!GROUP_NAME.test(to)) {
     throw new Error(`"${to}" is not a valid group name (letters, digits and underscores; not starting with a digit).`);
@@ -875,20 +926,29 @@ function planGroupRename(root, settings, environment, diskText, from, to) {
   if (fs.existsSync(groupVarsTo)) {
     throw new Error(`${groupVarsTo} already exists, so "${from}" cannot be renamed to "${to}".`);
   }
+  const [blocking] = groupVarsFilesOf(environment.groupVarsDir, to);
+  if (blocking) {
+    throw new Error(`${blocking} already exists, so "${from}" cannot be renamed to "${to}".`);
+  }
   const groupVarsFromPath = path.join(environment.groupVarsDir, from);
 
   /** @type {string[]} */
   const services = [];
+  /** @param {string} header */
+  const moveHeader = (header) =>
+    header === from ? to : header.startsWith(`${from}:`) ? to + header.slice(from.length) : header;
   const renamed = {
     ...inventory,
     serverGroups: inventory.serverGroups.map((group) => (group.name === from ? { ...group, name: to } : group)),
     services: inventory.services.map((service) => {
+      const name = service.name === from ? to : service.name;
       if (!service.children.includes(from)) {
-        return service;
+        return { ...service, name };
       }
       services.push(service.name);
-      return { ...service, children: service.children.map((child) => (child === from ? to : child)) };
+      return { ...service, name, children: service.children.map((child) => (child === from ? to : child)) };
     }),
+    manual: inventory.manual.map((block) => ({ ...block, anchors: block.anchors.map(moveHeader) })),
   };
 
   /** @type {string[]} */
@@ -914,22 +974,13 @@ function planGroupRename(root, settings, environment, diskText, from, to) {
     text: serializeInventory(renamed),
     groupVarsFrom: isDirectory(groupVarsFromPath) ? groupVarsFromPath : null,
     groupVarsTo,
+    groupVarsFiles: groupVarsFilesOf(environment.groupVarsDir, from),
     services,
     playbooks: playbooksNamingGroup(root, settings, from),
     otherEnvironments,
+    manualReferences: manualReferencesTo(inventory, from),
   };
 }
-
-/**
- * @typedef {object} GroupDeletePlan
- * @property {string} environment
- * @property {string} name
- * @property {string} text New inventory text.
- * @property {string | null} groupVars group_vars directory of the group, if it exists (left on disk).
- * @property {string[]} services Services that listed the group.
- * @property {string[]} emptied Those services that end up with no children and no hosts.
- * @property {string[]} playbooks Playbooks naming the group.
- */
 
 /**
  * @param {string} root
@@ -948,17 +999,19 @@ function planGroupDelete(root, settings, environment, diskText, name) {
   const next = {
     ...inventory,
     serverGroups: inventory.serverGroups.filter((group) => group.name !== name),
-    services: inventory.services.map((service) => {
-      if (!service.children.includes(name)) {
-        return service;
-      }
-      services.push(service.name);
-      const children = service.children.filter((child) => child !== name);
-      if (children.length === 0 && service.hosts.length === 0) {
-        emptied.push(service.name);
-      }
-      return { ...service, children };
-    }),
+    services: inventory.services
+      .filter((service) => service.name !== name)
+      .map((service) => {
+        if (!service.children.includes(name)) {
+          return service;
+        }
+        services.push(service.name);
+        const children = service.children.filter((child) => child !== name);
+        if (children.length === 0 && service.hosts.length === 0) {
+          emptied.push(service.name);
+        }
+        return { ...service, children };
+      }),
   };
   const groupVars = path.join(environment.groupVarsDir, name);
   return {
@@ -966,20 +1019,26 @@ function planGroupDelete(root, settings, environment, diskText, name) {
     name,
     text: serializeInventory(next),
     groupVars: isDirectory(groupVars) ? groupVars : null,
+    groupVarsFiles: groupVarsFilesOf(environment.groupVarsDir, name),
     services,
     emptied,
     playbooks: playbooksNamingGroup(root, settings, name),
+    manualReferences: manualReferencesTo(inventory, name),
   };
 }
 
 /**
- * Write the new inventory, then move the group_vars directory. The text goes
- * first: a failed write then changes nothing at all.
+ * Write the new inventory, then move the group_vars directory. The target is
+ * re-checked first (it may have appeared since planning), and the text goes
+ * before the move: a failed write then changes nothing at all.
  *
  * @param {GroupRenamePlan} plan
  * @param {string} inventoryPath
  */
 function applyGroupRename(plan, inventoryPath) {
+  if (plan.groupVarsFrom && fs.existsSync(plan.groupVarsTo)) {
+    throw new Error(`${plan.groupVarsTo} now exists; nothing was changed.`);
+  }
   fs.writeFileSync(inventoryPath, plan.text);
   if (plan.groupVarsFrom) {
     try {
