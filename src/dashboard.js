@@ -359,7 +359,18 @@ class DashboardPanel {
     if (message.type === "saveInventory") {
       const found = model.resolveEnvironmentRequest(this.model, message.folder, message.environment);
       const target = found && this.discovered(found.folder.path, found.environment.name);
+      // Always answered: the page disables Save until it hears back.
+      /** @param {string | null} error @param {boolean} cancelled */
+      const answer = (error, cancelled) =>
+        void this.panel.webview.postMessage({
+          type: "inventoryResult",
+          folder: found ? found.folder.path : message.folder,
+          environment: found ? found.environment.name : message.environment,
+          error,
+          cancelled,
+        });
       if (!found || !target) {
+        answer(null, true);
         return;
       }
       /** @type {string | null | undefined} */
@@ -373,14 +384,7 @@ class DashboardPanel {
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
       }
-      if (error !== undefined) {
-        void this.panel.webview.postMessage({
-          type: "inventoryResult",
-          folder: found.folder.path,
-          environment: found.environment.name,
-          error,
-        });
-      }
+      answer(error === undefined ? null : error, error === undefined);
       return;
     }
     if (message.type === "createInventory") {

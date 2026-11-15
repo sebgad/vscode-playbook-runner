@@ -32,12 +32,14 @@
    * "a:<…>" for one added here, whose name is typed), `added` marks the latter,
    * and the third element of a var says whether it is an "Other variables"
    * row (true) or one of the SSH fields of a host (false) -- fixed when the
-   * row is made, so typing a key never moves a row between the two. A child
+   * row is made, so typing a key never moves a row between the two; the
+   * fourth, whether the page has set it (an SSH row the page emptied is left
+   * out on Save, one that was empty in the file is kept). A child
    * that is an added group is held as REF + its uid until Save, so renaming
    * or removing it touches only what points at it. Server groups carry an
    * empty `children`.
    *
-   * @typedef {[string, string, boolean]} DraftVar
+   * @typedef {[string, string, boolean, boolean]} DraftVar
    * @typedef {{ name: string, vars: DraftVar[] }} Host
    * @typedef {{ uid: string, name: string, children: string[], hosts: Host[], vars: DraftVar[], readOnly: boolean, added: boolean }} Group
    * @typedef {{ hash: string, serverGroups: Group[], services: Group[] }} Draft
@@ -84,15 +86,38 @@
     for (const item of value) {
       if (
         !Array.isArray(item) ||
-        (item.length !== 2 && item.length !== 3) ||
+        item.length < 2 ||
+        item.length > 4 ||
         typeof item[0] !== "string" ||
         typeof item[1] !== "string" ||
-        (item.length === 3 && typeof item[2] !== "boolean")
+        (item.length >= 3 && typeof item[2] !== "boolean") ||
+        (item.length === 4 && typeof item[3] !== "boolean")
       ) {
         return null;
       }
-      const other = item.length === 3 ? item[2] === true : !(ofHost && SSH_FIELD_SET.has(item[0]));
-      vars.push([item[0], item[1], ofHost ? other : true]);
+      const other = item.length >= 3 ? item[2] === true : !(ofHost && SSH_FIELD_SET.has(item[0]));
+      vars.push([item[0], item[1], ofHost ? other : true, item[3] === true]);
+    }
+    return ofHost ? oneSshRowEach(vars) : vars;
+  }
+
+  /**
+   * A host has one SSH-field row per field: a repeated key after the first
+   * becomes an "Other variables" row, where it shows as a duplicate and can
+   * be removed.
+   *
+   * @param {DraftVar[]} vars @returns {DraftVar[]}
+   */
+  function oneSshRowEach(vars) {
+    /** @type {Set<string>} */
+    const seen = new Set();
+    for (const entry of vars) {
+      if (!entry[2]) {
+        if (seen.has(entry[0])) {
+          entry[2] = true;
+        }
+        seen.add(entry[0]);
+      }
     }
     return vars;
   }
@@ -1641,9 +1666,12 @@
 
   /** @param {any} vars @param {boolean} ofHost @returns {DraftVar[]} */
   function copyVars(vars, ofHost) {
-    return vars.map(
-      (/** @type {any} */ v) => /** @type {DraftVar} */ ([String(v[0]), String(v[1]), !(ofHost && SSH_FIELD_SET.has(String(v[0])))]),
+    /** @type {DraftVar[]} */
+    const copied = vars.map(
+      (/** @type {any} */ v) =>
+        /** @type {DraftVar} */ ([String(v[0]), String(v[1]), !(ofHost && SSH_FIELD_SET.has(String(v[0]))), false]),
     );
+    return ofHost ? oneSshRowEach(copied) : copied;
   }
 
   /** A group of the model as the page edits it. @param {any} group @returns {Group} */
@@ -1691,7 +1719,8 @@
       inventory,
       draft,
       frozen,
-      canEdit: Boolean(inventory.editable) && !frozen,
+      // While a save is out, edits would be lost when its answer drops the draft.
+      canEdit: Boolean(inventory.editable) && !frozen && !saving.has(key),
       serverGroups: draft ? draft.serverGroups : inventory.serverGroups.map(copyGroup),
       services: draft ? draft.services : inventory.services.map(copyGroup),
     };
@@ -1737,7 +1766,7 @@
 
   /**
    * Set an SSH field. A cleared field keeps its row (and so its place in the
-   * file) while editing; Save leaves empty SSH rows out.
+   * file) while editing; Save leaves out the empty SSH rows the page made.
    *
    * @param {DraftVar[]} vars @param {string} field @param {string} value
    */
@@ -1745,14 +1774,15 @@
     const found = sshEntry(vars, field);
     if (found) {
       found[1] = value;
+      found[3] = true;
     } else if (value) {
-      vars.push([field, value, false]);
+      vars.push([field, value, false, true]);
     }
   }
 
   /** The vars as they will be sent. @param {DraftVar[]} vars @returns {[string, string][]} */
   function sentVars(vars) {
-    return vars.filter((v) => v[2] || v[1] !== "").map((v) => /** @type {[string, string]} */ ([v[0], v[1]]));
+    return vars.filter((v) => v[2] || v[1] !== "" || !v[3]).map((v) => /** @type {[string, string]} */ ([v[0], v[1]]));
   }
 
   /** Keys that would be sent more than once. @param {DraftVar[]} vars @returns {Set<string>} */
@@ -2062,7 +2092,7 @@
             {
               class: "link",
               "data-key": `${spec.keyBase}:add`,
-              onclick: () => mutate(ctx, (draft) => (varsOf(draft) || []).push(["", "", true])),
+              onclick: () => mutate(ctx, (draft) => (varsOf(draft) || []).push(["", "", true, true])),
             },
             icon("add"),
             "Variable",
@@ -2979,7 +3009,9 @@
       }
       const key = `${message.folder}\n${message.environment}`;
       stopSaving(key);
-      if (message.error === null) {
+      if (message.cancelled === true) {
+        // Not saved and nothing wrong (the confirmation was declined): the draft stays.
+      } else if (message.error === null) {
         // Saved, or nothing to save: the file on disk is the truth again.
         // Groups added and open stay open under the uid they now have.
         const draft = state.drafts.get(key);
