@@ -44,17 +44,19 @@ const MANUAL_END = "# playbook-runner: manual end";
 function stripComment(line) {
   /** @type {string | null} */
   let quote = null;
+  let previous = "";
   for (let i = 0; i < line.length; i++) {
-    const ch = /** @type {string} */ (line[i]);
+    const ch = line.charAt(i);
     if (quote) {
       if (ch === quote) {
         quote = null;
       }
     } else if (ch === "'" || ch === '"') {
       quote = ch;
-    } else if ((ch === "#" || ch === ";") && (i === 0 || /\s/.test(/** @type {string} */ (line[i - 1])))) {
+    } else if ((ch === "#" || ch === ";") && (i === 0 || /\s/.test(previous))) {
       return { text: line.slice(0, i).trim(), comment: true };
     }
+    previous = ch;
   }
   return { text: line.trim(), comment: false };
 }
@@ -95,11 +97,28 @@ function tokenize(text) {
   return tokens;
 }
 
-/** @param {string} value */
+const NUMBER = /^[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?$/;
+
+/**
+ * Whether Ansible would read the bare text as something other than a string.
+ *
+ * @param {string} inner
+ */
+function looksLikeLiteral(inner) {
+  return NUMBER.test(inner) || ["True", "False", "None"].includes(inner) || /^[[{(]/.test(inner);
+}
+
+/**
+ * Strip one pair of surrounding quotes, except where that would change the
+ * value's type (`"22"` stays quoted: bare, Ansible reads an int).
+ *
+ * @param {string} value
+ */
 function unquote(value) {
-  const first = value[0];
+  const first = value.charAt(0);
   if (value.length >= 2 && (first === "'" || first === '"') && value.endsWith(first)) {
-    return value.slice(1, -1);
+    const inner = value.slice(1, -1);
+    return looksLikeLiteral(inner) ? value : inner;
   }
   return value;
 }
@@ -169,16 +188,22 @@ function parseInventory(text) {
   /** @type {string[]} */
   const headers = [];
   let comments = 0;
-  let duplicates = 0;
+  let duplicateSections = 0;
+  let duplicateEntries = 0;
+  let unreadable = 0;
   /** @type {string | null} */
   let error = null;
 
-  /** @type {{ line: number, lines: string[] } | null} */
+  /** @type {{ line: number, lines: string[], opensSection: boolean } | null} */
   let block = null;
+  // A block that opened a section moves where header-less lines belong.
+  let afterSectionBlock = false;
   /** @type {{ kind: "hosts" | "vars" | "children", group: GroupRecord | null }} */
   let context = { kind: "hosts", group: null };
+  /** Keys seen in the current section occurrence (hosts, var keys, members). */
+  let sectionSeen = new Set();
 
-  lines.forEach((raw, index) => {
+  for (const [index, raw] of lines.entries()) {
     const lineNumber = index + 1;
     const marker = raw.trim();
 
@@ -187,14 +212,14 @@ function parseInventory(text) {
         error = error || `Manual block opened on line ${lineNumber} is nested inside the one opened on line ${block.line}.`;
         block.lines.push(raw);
       } else {
-        block = { line: lineNumber, lines: [raw] };
+        block = { line: lineNumber, lines: [raw], opensSection: false };
       }
-      return;
+      continue;
     }
     if (marker === MANUAL_END) {
       if (!block) {
         error = error || `Manual block end on line ${lineNumber} has no matching begin.`;
-        return;
+        continue;
       }
       block.lines.push(raw);
       /** @type {string[]} */
@@ -205,79 +230,111 @@ function parseInventory(text) {
         }
       }
       manual.push({ text: block.lines.join("\n"), line: block.line, anchors });
+      afterSectionBlock = afterSectionBlock || block.opensSection;
       block = null;
-      return;
+      continue;
     }
 
     const { text: content, comment } = stripComment(raw);
+    const header = /^\[([^\]]+)\]$/.exec(content);
     if (block) {
       block.lines.push(raw);
-      const header = /^\[([^\]]+)\]$/.exec(content);
       if (header) {
-        manualGroups.add(/** @type {string} */ (header[1]).replace(/:(vars|children)$/, ""));
+        block.opensSection = true;
+        manualGroups.add((header[1] ?? "").replace(/:(vars|children)$/, ""));
       }
-      return;
+      continue;
     }
 
     if (comment) {
       comments++;
     }
     if (!content) {
-      return;
+      continue;
     }
 
-    const header = /^\[([^\]]+)\]$/.exec(content);
     if (header) {
-      const full = /** @type {string} */ (header[1]);
+      const full = header[1] ?? "";
       if (seenHeaders.has(full)) {
-        duplicates++;
+        duplicateSections++;
       }
       seenHeaders.add(full);
       headers.push(full);
+      afterSectionBlock = false;
+      sectionSeen = new Set();
       const parts = /^(.*):(vars|children)$/.exec(full);
-      const record = group(parts ? /** @type {string} */ (parts[1]) : full);
-      const kind = parts ? /** @type {"vars" | "children"} */ (parts[2]) : "hosts";
+      const record = group(parts ? (parts[1] ?? "") : full);
+      const kind = parts?.[2] === "vars" ? "vars" : parts?.[2] === "children" ? "children" : "hosts";
       if (kind === "children") {
         record.isService = true;
       }
       context = { kind, group: record };
-      return;
+      continue;
+    }
+
+    if (afterSectionBlock) {
+      error = error || `Line ${lineNumber} follows a manual block that opens a section; start it with a section header.`;
+      afterSectionBlock = false;
     }
 
     const record = context.group || group("ungrouped");
     context.group = record;
     if (context.kind === "vars") {
       const entry = splitVar(content);
-      if (entry) {
+      if (!entry) {
+        unreadable++;
+      } else {
+        if (sectionSeen.has(entry[0])) {
+          duplicateEntries++;
+        }
+        sectionSeen.add(entry[0]);
         setVar(record.vars, entry);
       }
     } else if (context.kind === "children") {
-      const member = tokenize(content)[0];
-      if (member && !record.children.includes(member)) {
-        record.children.push(member);
+      const [member, ...extra] = tokenize(content);
+      unreadable += extra.length;
+      if (member !== undefined) {
+        if (sectionSeen.has(member)) {
+          duplicateEntries++;
+        }
+        sectionSeen.add(member);
+        if (!record.children.includes(member)) {
+          record.children.push(member);
+        }
       }
     } else {
       const [name, ...rest] = tokenize(content);
-      if (!name) {
-        return;
+      if (name === undefined) {
+        continue;
       }
+      if (sectionSeen.has(name)) {
+        duplicateEntries++;
+      }
+      sectionSeen.add(name);
       let host = record.hosts.find((item) => item.name === name);
       if (!host) {
         host = { name, vars: [] };
         record.hosts.push(host);
       }
+      /** @type {Set<string>} */
+      const keys = new Set();
       for (const token of rest) {
         const entry = splitVar(token);
-        if (entry) {
-          setVar(host.vars, entry);
+        if (!entry) {
+          unreadable++;
+          continue;
         }
+        if (keys.has(entry[0])) {
+          duplicateEntries++;
+        }
+        keys.add(entry[0]);
+        setVar(host.vars, entry);
       }
     }
-  });
+  }
 
   if (block) {
-    const open = /** @type {{ line: number }} */ (block);
-    error = error || `Manual block opened on line ${open.line} is never closed.`;
+    error = error || `Manual block opened on line ${block.line} is never closed.`;
   }
 
   /** @type {string[]} */
@@ -285,8 +342,14 @@ function parseInventory(text) {
   if (comments > 0) {
     warnings.push(`${comments} comment line(s) outside manual blocks will be removed`);
   }
-  if (duplicates > 0) {
-    warnings.push(`${duplicates} duplicate section(s) will be merged`);
+  if (duplicateSections > 0) {
+    warnings.push(`${duplicateSections} duplicate section(s) will be merged`);
+  }
+  if (unreadable > 0) {
+    warnings.push(`${unreadable} unreadable entr${unreadable === 1 ? "y" : "ies"} will be removed`);
+  }
+  if (duplicateEntries > 0) {
+    warnings.push(`${duplicateEntries} duplicate entr${duplicateEntries === 1 ? "y" : "ies"} will be merged`);
   }
 
   const records = [...groups.values()];
@@ -322,6 +385,14 @@ function parseInventory(text) {
  * @param {string} value
  */
 function quoteValue(value) {
+  const first = value.charAt(0);
+  if (value.length >= 2 && (first === "'" || first === '"') && value.endsWith(first)) {
+    // Already wrapped (kept so a string stays a string): write as is, unless
+    // the quote char also occurs unescaped inside.
+    if (!new RegExp(`(?<!\\\\)${first}`).test(value.slice(1, -1))) {
+      return value;
+    }
+  }
   if (!/[\s'"#;]/.test(value)) {
     return value;
   }
@@ -352,7 +423,7 @@ function serializeInventory(inventory) {
   const add = (header, body) => sections.push({ header, lines: [`[${header}]`, ...body] });
 
   for (const group of inventory.serverGroups) {
-    if (group.name !== "all" && (group.hosts.length > 0 || group.vars.length === 0)) {
+    if ((group.name !== "all" || group.hosts.length > 0) && (group.hosts.length > 0 || group.vars.length === 0)) {
       add(group.name, group.hosts.map(hostLine));
     }
   }

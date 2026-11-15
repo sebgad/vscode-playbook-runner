@@ -159,6 +159,44 @@ describe("parseInventory / serializeInventory", () => {
     });
   });
 
+  it("rejects header-less lines after a block that opened a section", () => {
+    const parsed = parseInventory(`[a]\nh1\n${MANUAL_BEGIN}\n[odd]\nx1\n${MANUAL_END}\nh2\n`);
+    assert.match(parsed.error || "", /Line 7 follows a manual block/);
+    assert.equal(parseInventory(`[a]\nh1\n${MANUAL_BEGIN}\n[odd]\n${MANUAL_END}\n[b]\nh2\n`).error, null);
+  });
+
+  it("keeps hosts under [all] but never writes an empty [all]", () => {
+    const parsed = parseInventory("[all]\nh1\n[all:vars]\nk=v\n");
+    assert.equal(serializeInventory(parsed), "[all]\nh1\n\n[all:vars]\nk=v\n");
+    assert.ok(!serializeInventory(parseInventory("[all:vars]\nk=v\n")).includes("[all]\n"));
+  });
+
+  it("warns about unreadable and duplicate entries", () => {
+    const unreadable = parseInventory("[g]\nh1 stray k=v\n[g:vars]\nnoequals\n[s:children]\na b\n");
+    assert.deepEqual(unreadable.warnings, ["3 unreadable entries will be removed"]);
+    assert.deepEqual(parseInventory("[g]\nh1 stray\n").warnings, ["1 unreadable entry will be removed"]);
+
+    const duplicate = parseInventory("[g]\nh a=1 a=2\nh\n[g:vars]\nk=1\nk=2\n[s:children]\ng\ng\n");
+    assert.deepEqual(duplicate.warnings, ["4 duplicate entries will be merged"]);
+    assert.deepEqual(parseInventory("[g]\nh\nh\n").warnings, ["1 duplicate entry will be merged"]);
+  });
+
+  it("keeps quotes that stop a string from becoming another type", () => {
+    const parsed = parseInventory('[g:vars]\nport="22"\nflag=\'True\'\nlist="[1]"\nname="web"\n');
+    assert.deepEqual(parsed.serverGroups[0]?.vars, [
+      ["port", '"22"'],
+      ["flag", "'True'"],
+      ["list", '"[1]"'],
+      ["name", "web"],
+    ]);
+    assert.equal(serializeInventory(parsed), '[g:vars]\nport="22"\nflag=\'True\'\nlist="[1]"\nname=web\n');
+    const host = parseInventory("[g]\nh p='8080' k='-o A=b -o C=d'\n").serverGroups[0]?.hosts[0];
+    assert.deepEqual(host?.vars, [
+      ["p", "'8080'"],
+      ["k", "-o A=b -o C=d"],
+    ]);
+  });
+
   it("keeps CRLF", () => {
     const parsed = parseInventory("[a]\r\nh1\r\n[a:vars]\r\nk=v\r\n");
     assert.equal(parsed.eol, "\r\n");
