@@ -221,8 +221,8 @@ file hash like `saveInventory`.
     list updated;
   * `group_vars/<from>/` → `group_vars/<to>/` in **this environment only**, if
     it exists (refused if `group_vars/<to>/` already exists);
-  * `playbookRunner.serviceEnvironments`: the key renamed when it names the
-    group (`renameInSetting`, as for environments);
+  * no setting changes: `playbookRunner.serviceEnvironments` lists
+    *environment* names, not groups, so a group rename does not touch it;
   * **listed, not edited**: playbooks whose `hosts:` line names `<from>` (read
     with the same line scanner style as `tags.js`), and the other
     environments that still have a group called `<from>`.
