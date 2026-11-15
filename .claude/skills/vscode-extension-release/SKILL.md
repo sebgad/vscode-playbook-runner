@@ -6,8 +6,8 @@ description: Cutting a version of the Playbook Runner VS Code extension - bumpin
 # Releasing the Playbook Runner extension
 
 There is no build step and no marketplace — a release is a version bump, a
-changelog entry and a `.vsix` the user installs locally. Everything happens in
-`scripts/vscode-extension/`.
+changelog entry and a `.vsix` the user installs locally. Everything happens at
+the root of this repository, `vscode-playbook-runner`.
 
 ## Order
 

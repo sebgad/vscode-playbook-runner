@@ -38,8 +38,8 @@
 ### Task 1: Playbook outline in the tag scanner
 
 **Files:**
-- Modify: `scripts/vscode-extension/src/tags.js`
-- Test: `scripts/vscode-extension/test/tags.test.js`
+- Modify: `src/tags.js`
+- Test: `test/tags.test.js`
 
 **Interfaces:**
 - Produces:
@@ -63,7 +63,7 @@
   - `.yaml task files`, `symlink cycle terminates` (reuse the existing cycle fixture shape), `missing playbook → { plays: [], strategy: null, skipped: 0 }`.
   - `findPlaybookTags order is unchanged`: the existing tag-order test still passes untouched.
 
-- [ ] **Step 2: Run** `cd scripts/vscode-extension && node --test test/tags.test.js`. Expected: the new tests FAIL with `findPlaybookOutline is not a function`.
+- [ ] **Step 2: Run** `node --test test/tags.test.js`. Expected: the new tests FAIL with `findPlaybookOutline is not a function`.
 
 - [ ] **Step 3: Implement `findPlaybookOutline` in `src/tags.js`.** Write a separate walk that reuses the existing line helpers (`readLine`, `blockAfter`, `inlineField`, `fieldIn`, `resolveRole`, `resolveFile`, `realPathOrNull`, `MAX_FILES`). It must not reuse `scanFile`, whose deferred descent produces tag order, not run order: here a reference descends *in place*. A play starts at a top-level sequence item that has `hosts:`. Tasks are sequence items under `pre_tasks`, `tasks`, `post_tasks` (in that order per play, as ansible runs them, with `roles:` between `pre_tasks` and `tasks`) and inside `block`/`rescue`/`always`. Handlers are ignored. Export both functions.
 
@@ -76,8 +76,8 @@
 ### Task 2: Task-range run options, env and pre-flight check
 
 **Files:**
-- Modify: `scripts/vscode-extension/src/command.js`, `src/defaults.js`, `package.json` (configuration + `taskDefinitions`)
-- Test: `scripts/vscode-extension/test/command.test.js`
+- Modify: `src/command.js`, `src/defaults.js`, `package.json` (configuration + `taskDefinitions`)
+- Test: `test/command.test.js`
 
 **Interfaces:**
 - Consumes: `PlaybookOutline`, `outlineTaskNames` (Task 1).
@@ -120,9 +120,9 @@
 ### Task 3: The range strategy plugin
 
 **Files:**
-- Create: `scripts/vscode-extension/ansible/strategy/playbook_runner_range.py`
-- Create: `scripts/vscode-extension/test/range-plugin.test.js`
-- Modify: `.vscodeignore` (add `**/__pycache__/**`), `scripts/vscode-extension/.gitignore` (same)
+- Create: `ansible/strategy/playbook_runner_range.py`
+- Create: `test/range-plugin.test.js`
+- Modify: `.vscodeignore` (add `**/__pycache__/**`), `.gitignore` (same)
 
 **Interfaces:**
 - Consumes: `buildPlaybookEnv`, `RANGE_STRATEGY` (Task 2).
@@ -162,8 +162,8 @@
 ### Task 4: Run history
 
 **Files:**
-- Create: `scripts/vscode-extension/src/history.js`
-- Test: `scripts/vscode-extension/test/history.test.js`
+- Create: `src/history.js`
+- Test: `test/history.test.js`
 
 **Interfaces:**
 - Consumes: `sanitizeRunOptions` (Task 2).
@@ -198,7 +198,7 @@
 ### Task 5: Wire ranges, history and status files into the run path
 
 **Files:**
-- Modify: `scripts/vscode-extension/src/runner.js`, `scripts/vscode-extension/extension.js`
+- Modify: `src/runner.js`, `extension.js`
 
 **Interfaces:**
 - Consumes: Tasks 1–4.
@@ -224,7 +224,7 @@
 ### Task 6: Native polish — tree status, badge, status bar, welcome view, pickers
 
 **Files:**
-- Modify: `scripts/vscode-extension/src/tree.js`, `src/pickers.js`, `extension.js`, `package.json`
+- Modify: `src/tree.js`, `src/pickers.js`, `extension.js`, `package.json`
 
 **Interfaces:**
 - Consumes: `RunTracker.history`, `latestFor`, `relativeTime` (Tasks 4–5); `findPlaybookOutline` (Task 1).
@@ -244,8 +244,8 @@
 ### Task 7: Dashboard model and webview message parsing
 
 **Files:**
-- Create: `scripts/vscode-extension/src/model.js`
-- Test: `scripts/vscode-extension/test/model.test.js`
+- Create: `src/model.js`
+- Test: `test/model.test.js`
 
 **Interfaces:**
 - Consumes: `findEnvironments`, `findServices` (discovery), `latestFor`, `RunEntry` (Task 4), `PlaybookOutline` (Task 1), `buildPlaybookArgs`, `buildPlaybookEnv`, `sanitizeRunOptions`, `validateTaskRange` (Task 2).
@@ -282,7 +282,7 @@
 ### Task 8: Dashboard webview
 
 **Files:**
-- Create: `scripts/vscode-extension/src/dashboard.js`, `media/dashboard/main.js`, `media/dashboard/style.css`, `media/codicons/codicon.css`, `media/codicons/codicon.ttf`, `media/codicons/LICENSE`
+- Create: `src/dashboard.js`, `media/dashboard/main.js`, `media/dashboard/style.css`, `media/codicons/codicon.css`, `media/codicons/codicon.ttf`, `media/codicons/LICENSE`
 - Modify: `extension.js`, `package.json` (command, `view/title` menu `navigation@0`, `activationEvents: ["onWebviewPanel:playbookRunner.dashboard"]` if the engine needs it), `eslint.config.js`, `package.json` devDependencies (`@vscode/codicons`, pinned to an exact version, only to copy the files from)
 
 **Interfaces:**
@@ -315,7 +315,7 @@
 ### Task 9: Docs and final check
 
 **Files:**
-- Modify: `scripts/vscode-extension/README.md`, `CHANGELOG.md` (under `## Unreleased`), `workflow.md` (new numbered steps after the last one: the dashboard, and the range plugin with its accepted trade-off of depending on ansible-core internals and how it is guarded), `.claude/skills/vscode-extension/SKILL.md` (add `src/tags.js`, `src/history.js`, `src/model.js` to the never-`vscode` table and the new `contextValue`s if any were added), and the root `CLAUDE.md` only if a statement there became false.
+- Modify: `README.md`, `CHANGELOG.md` (under `## Unreleased`), `workflow.md` (new numbered steps after the last one: the dashboard, and the range plugin with its accepted trade-off of depending on ansible-core internals and how it is guarded), `.claude/skills/vscode-extension/SKILL.md` (add `src/tags.js`, `src/history.js`, `src/model.js` to the never-`vscode` table and the new `contextValue`s if any were added), and the root `CLAUDE.md` only if a statement there became false.
 
 - [ ] **Step 1: Write the docs.** README: dashboard section with a sketch, the `setupTags` row in the settings table, *From/Until task* and *Step* in the run-options description, and a note that task ranges need the bundled plugin and ansible-core ≥ 2.22.
 - [ ] **Step 2: Run** `npm run check`, then `npm run package`. Expected: both PASS, and `unzip -l dist/*.vsix | grep -E 'ansible/strategy/playbook_runner_range.py|media/codicons/codicon.ttf|media/dashboard/main.js'` lists all three.

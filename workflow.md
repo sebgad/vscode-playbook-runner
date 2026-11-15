@@ -4,7 +4,7 @@
 > three shell scripts and `.vscode/tasks.json` have since been deleted, so the
 > "today" column below describes how things were before the extension, not now.
 
-Plan for turning `scripts/vscode-extension` from a *tasks.json viewer* into a
+Plan for turning this extension (then at `homelab-infra/scripts/vscode-extension`, now the `vscode-playbook-runner` repository) from a *tasks.json viewer* into a
 self-contained Ansible front end that discovers everything from the filesystem.
 
 ## 1. Where we are
@@ -77,7 +77,7 @@ Plain JavaScript, no build step and no dependencies — the symlink install in t
 README keeps working.
 
 ```
-scripts/vscode-extension/
+vscode-playbook-runner/
 ├── extension.js        activate(): wire providers, commands, watchers
 ├── src/
 │   ├── defaults.js     setting defaults, shared by settings.js and discovery.js
@@ -487,7 +487,8 @@ tree without a reload.
     range-plugin tests look for this repository's `.venv` before `PATH`.
     The design documents under `docs/superpowers/` and the Claude skills
     and agent came along as plain copies; their history stays in
-    homelab-infra. Earlier steps keep the old path where they name it.
+    homelab-infra. Earlier steps have since been updated to name paths relative
+    to this repository.
 
 ## 10. Verification
 
