@@ -141,17 +141,67 @@ function selectEnvironments(environments, wanted) {
 }
 
 /**
+ * A playbook that does nothing but ping the service's group, tagged `hello`.
+ * Enough to prove the connection and to have something to run and tag-select.
+ *
+ * @param {string} service a name validateServiceName accepted
+ * @returns {string}
+ */
+function starterPlaybook(service) {
+  return [
+    `- name: ${service}`,
+    `  hosts: ${service}`,
+    "  gather_facts: false",
+    "  tasks:",
+    "    - name: Check the connection",
+    "      ansible.builtin.ping:",
+    "      tags: [hello]",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Whether an INI inventory lists anything in a group: a host under `[group]`,
+ * or a child group under `[group:children]`. `[group:vars]` is not a host.
+ * A line scan, not a parser -- it only has to tell "empty" from "not empty".
+ *
+ * @param {string} inventoryText
+ * @param {string} group
+ * @returns {boolean}
+ */
+function groupHasHosts(inventoryText, group) {
+  let inside = false;
+  for (const raw of inventoryText.split(/\r?\n/)) {
+    const line = raw.trim();
+    const header = /^\[([^\]]+)\]$/.exec(line);
+    if (header) {
+      const section = header[1] || "";
+      inside = section === group || section === `${group}:children`;
+      continue;
+    }
+    if (inside && line && !line.startsWith("#") && !line.startsWith(";")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * What a new service would consist of: the playbook folder once, and a
  * group_vars folder with an empty env file in each environment that exists
  * right now -- or in each one serviceEnvironments names, when it names any.
  * Nothing is written -- the plan is what the confirmation shows.
  *
+ * With `opts.starter`, the playbook folder also gets `<name>.yml`, a ping on
+ * the service's group, so the service runs and shows up in the dashboard.
+ *
  * @param {string} root workspace folder path
  * @param {string} name
  * @param {Partial<import("./defaults").Settings>} [settings]
+ * @param {{ starter?: boolean }} [opts]
  * @returns {SkeletonPlan}
  */
-function planService(root, name, settings) {
+function planService(root, name, settings, opts = {}) {
   const config = withDefaults(settings);
   const complaint = validateServiceName(name);
   if (complaint) {
@@ -165,17 +215,27 @@ function planService(root, name, settings) {
   /**
    * @param {"directory" | "file"} type
    * @param {string} target
+   * @param {string} [content]
    */
-  const add = (type, target) => {
-    entries.push({
+  const add = (type, target, content) => {
+    /** @type {SkeletonEntry} */
+    const entry = {
       type,
       path: target,
       relative: path.relative(root, target),
       exists: type === "directory" ? isDirectory(target) : isFile(target),
-    });
+    };
+    if (content) {
+      entry.content = content;
+    }
+    entries.push(entry);
   };
 
-  add("directory", path.join(root, config.playbooksDir, service));
+  const playbookDir = path.join(root, config.playbooksDir, service);
+  add("directory", playbookDir);
+  if (opts.starter) {
+    add("file", path.join(playbookDir, `${service}.yml`), starterPlaybook(service));
+  }
 
   const { selected: environments, unknown, limited } = selectEnvironments(
     findEnvironments(root, config),
@@ -249,7 +309,9 @@ function createSkeleton(plan) {
 module.exports = {
   createSkeleton,
   existingServiceNames,
+  groupHasHosts,
   planService,
   selectEnvironments,
+  starterPlaybook,
   validateServiceName,
 };

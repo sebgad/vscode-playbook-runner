@@ -16,8 +16,10 @@ const { afterEach, beforeEach, describe, it } = require("node:test");
 const {
   createSkeleton,
   existingServiceNames,
+  groupHasHosts,
   planService,
   selectEnvironments,
+  starterPlaybook,
   validateServiceName,
 } = require("../src/scaffold");
 const { makeFixture, removeFixture, required } = require("./helpers");
@@ -262,4 +264,37 @@ describe("createSkeleton", () => {
     assert.deepEqual(second.created, []);
     assert.equal(second.skipped.length, 5);
   });
+});
+
+describe("starter playbook", () => {
+  it("is a ping on the service's group", () => {
+    assert.equal(
+      starterPlaybook("web"),
+      "- name: web\n  hosts: web\n  gather_facts: false\n  tasks:\n    - name: Check the connection\n      ansible.builtin.ping:\n      tags: [hello]\n",
+    );
+  });
+
+  it("planService adds it only when asked", () => {
+    assert.equal(planService(root, "web").entries.some((e) => e.relative.endsWith("web.yml")), false);
+    const file = entry(planService(root, "web", {}, { starter: true }), "playbooks/web/web.yml");
+    assert.equal(file.type, "file");
+    assert.equal(file.content, starterPlaybook("web"));
+    assert.equal(file.exists, false);
+  });
+
+  it("is not overwritten", () => {
+    const plan = planService(root, "immich", {}, { starter: true });
+    assert.equal(entry(plan, "playbooks/immich/immich.yml").exists, true);
+    createSkeleton(plan);
+    assert.equal(fs.readFileSync(path.join(root, "playbooks/immich/immich.yml"), "utf8"), "");
+  });
+});
+
+describe("groupHasHosts", () => {
+  it("finds a host under the header", () => assert.equal(groupHasHosts("[web]\nhost1\n", "web"), true));
+  it("ignores comments and blank lines", () =>
+    assert.equal(groupHasHosts("[web]\n# none\n; none\n\n[db]\nh\n", "web"), false));
+  it("does not count :vars", () => assert.equal(groupHasHosts("[web:vars]\nx=1\n", "web"), false));
+  it("counts :children", () => assert.equal(groupHasHosts("[web:children]\nfront\n", "web"), true));
+  it("missing group", () => assert.equal(groupHasHosts("[db]\nh\n", "web"), false));
 });
