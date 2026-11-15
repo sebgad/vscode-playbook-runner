@@ -55,11 +55,15 @@ starter playbook (one `ansible.builtin.ping` task tagged `hello`) and
 `localhost` in the inventory, so ▶ works right away. Replace `localhost` with
 your hosts afterwards.
 
+![An empty workspace: the dashboard offers Get started…, and the Playbook Runner item in the status bar opens it](docs/images/getting_started.png)
+
 ## Dashboard
 
 The **`$(run-all) Playbook Runner`** status bar item (or *Playbook Runner:
 Open Dashboard*) opens the dashboard as an editor tab. The item next to it
 shows the newest run and runs it again on click.
+
+![The Runs tab: a service with its playbook, tags and tasks, and the run bar with the command line](docs/images/run_service.png)
 
 ```
 ┌ Playbook Runner  Runs|Settings|Inventory  ↻ Re-run last  ⊕ New service…  ⚿ Rekey vaults  [● production] [● staging] ┐
@@ -121,6 +125,8 @@ The **Inventory** tab edits the INI inventory of the environment shown:
 
 Hover a field, a section heading or a known `ansible_*` variable for what it
 means.
+
+![The Inventory tab: a server group with a host being added, its SSH fields, and the warning a nameless host gives before saving](docs/images/create_inventory.png)
 
 ```
 ┌ Inventory · hosts.ini                                                  Open in editor ┐
