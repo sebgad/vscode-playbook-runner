@@ -232,12 +232,16 @@ describe("validateInventory", () => {
   });
 
   it("refuses a child that does not exist", () => {
-    assert.equal(errors("[web]\nh1\n[svc:children]\nghost\n").length, 1);
+    const found = errors("[web]\nh1\n[svc:children]\nghost\n");
+    assert.equal(found.length, 1);
+    assert.match(found[0] ?? "", /"ghost".*no such group/);
     assert.deepEqual(errors("[web]\nh1\n[svc:children]\nweb\n"), []);
   });
 
   it("refuses a service cycle", () => {
-    assert.equal(errors("[a:children]\nb\n[b:children]\na\n").length, 1);
+    const found = errors("[a:children]\nb\n[b:children]\na\n");
+    assert.equal(found.length, 1);
+    assert.match(found[0] ?? "", /cycle/);
   });
 
   it("refuses a group name used twice", () => {
@@ -246,19 +250,39 @@ describe("validateInventory", () => {
     assert.ok(service);
     service.name = "web";
     service.children = [];
-    assert.equal(validateInventory(inventory).length, 1);
+    const found = validateInventory(inventory);
+    assert.equal(found.length, 1);
+    assert.match(found[0] ?? "", /"web" is used more than once/);
   });
 
   it("refuses a newline in a value", () => {
     const inventory = parseInventory("[web]\nh1\n");
     inventory.serverGroups[0]?.hosts[0]?.vars.push(["k", "a\nb"]);
-    assert.equal(validateInventory(inventory).length, 1);
+    const found = validateInventory(inventory);
+    assert.equal(found.length, 1);
+    assert.match(found[0] ?? "", /line break/);
   });
 
   it("refuses a dash in a group name", () => {
     const found = errors("[my-group]\nh1\n");
     assert.equal(found.length, 1);
     assert.match(found[0] ?? "", /letters, digits and _/);
+  });
+
+  it("accepts a manual-only group as a child", () => {
+    const text = `[svc:children]\nm\n\n${MANUAL_BEGIN}\n[m]\nhm\n${MANUAL_END}\n`;
+    assert.deepEqual(errors(text), []);
+  });
+
+  it("does not check read-only groups", () => {
+    const text = `[m-x]\nh-1 ansible_password=x\n\n${MANUAL_BEGIN}\n[m-x:vars]\nk=v\n${MANUAL_END}\n`;
+    const parsed = parseInventory(text);
+    assert.equal(parsed.serverGroups[0]?.readOnly, true);
+    assert.deepEqual(validateInventory(parsed), []);
+  });
+
+  it("does not name a path in the password message", () => {
+    assert.doesNotMatch(errors("[web]\nh1 ansible_password=x\n")[0] ?? "", /group_vars/);
   });
 
   it("accepts quoted non-string values", () => {
@@ -321,6 +345,24 @@ describe("mergeEdits", () => {
   });
 });
 
+describe("mergeEdits placement", () => {
+  const text = `[a]\nh\n\n[m]\nh\n${MANUAL_BEGIN}\n[m:vars]\nk=v\n${MANUAL_END}\n\n[b]\nh\n`;
+  /** @param {import("../src/inventory").Inventory} inv */
+  const names = (inv) => mergeEdits(parseInventory(text), inv).serverGroups.map((g) => g.name);
+
+  it("keeps a read-only group after its surviving neighbour", () => {
+    const edited = parseInventory(text);
+    edited.serverGroups = edited.serverGroups.filter((g) => g.name !== "a");
+    assert.deepEqual(names(edited), ["m", "b"]);
+  });
+
+  it("puts new groups last", () => {
+    const edited = parseInventory(text);
+    edited.serverGroups.push({ name: "c", hosts: [], vars: [], readOnly: false });
+    assert.deepEqual(names(edited), ["a", "m", "b", "c"]);
+  });
+});
+
 describe("describeChanges", () => {
   const base = "[podman_servers]\nh1 ansible_user=a\n[dns_servers]\nd1\n[immich:children]\npodman_servers\n";
 
@@ -330,6 +372,36 @@ describe("describeChanges", () => {
     after.serverGroups.find((group) => group.name === "podman_servers")?.hosts.push({ name: "h2", vars: [] });
     after.services.find((service) => service.name === "immich")?.children.push("dns_servers");
     assert.deepEqual(describeChanges(before, after), ["podman_servers: + host h2", "immich: + dns_servers"]);
+  });
+
+  it("describes added and removed things", () => {
+    const before = parseInventory("[g]\nh1\nh2\n[s:children]\ng\nx\n[x]\nhx\n");
+    const after = parseInventory("[g]\nh1\nh3\n[s:children]\ng\n[y]\n[t:children]\ng\n");
+    assert.deepEqual(describeChanges(before, after), [
+      "+ server group y",
+      "g: + host h3",
+      "g: \u2212 host h2",
+      "\u2212 server group x",
+      "+ service t",
+      "s: \u2212 x",
+    ]);
+  });
+
+  it("describes reordering", () => {
+    const before = parseInventory("[g]\nh1 a=1 b=2\nh2\n[h]\nh3\n[s:children]\ng\nh\n");
+    const after = parseInventory("[h]\nh3\n[g]\nh2\nh1 b=2 a=1\n[s:children]\nh\ng\n");
+    assert.deepEqual(describeChanges(before, after), [
+      "g: h1 changed (order)",
+      "g: hosts reordered",
+      "s: children reordered",
+      "groups reordered",
+    ]);
+  });
+
+  it("compares duplicate keys by every value", () => {
+    const before = parseInventory("[g]\nh1 a=1\n");
+    const after = parseInventory("[g]\nh1 a=2\n");
+    assert.deepEqual(describeChanges(before, after), ["g: h1 changed (a)"]);
   });
 
   it("describes removals, changed vars and whole groups", () => {

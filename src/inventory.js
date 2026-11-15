@@ -468,15 +468,17 @@ function serializeInventory(inventory) {
   return `${chunks.join("\n\n")}\n`.replace(/\n/g, inventory.eol);
 }
 
+/** @type {ReadonlySet<string>} */
 const PASSWORD_VARS = new Set(["ansible_password", "ansible_ssh_pass", "ansible_become_pass", "ansible_become_password"]);
 
-const SSH_FIELDS = [
+/** @type {readonly string[]} */
+const SSH_FIELDS = Object.freeze([
   "ansible_host",
   "ansible_user",
   "ansible_port",
   "ansible_ssh_private_key_file",
   "ansible_ssh_common_args",
-];
+]);
 
 const GROUP_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const HOST_NAME = /^[A-Za-z0-9_.\-[\]:]+$/;
@@ -529,9 +531,7 @@ function validateInventory(inventory) {
         errors.push(`${owner}: "${key}" is not a valid variable name.`);
       }
       if (PASSWORD_VARS.has(key)) {
-        errors.push(
-          `${owner}: ${key} must not be written to the inventory; put it in the vault of group ${group} (group_vars/${group}/vault) instead.`,
-        );
+        errors.push(`${owner}: ${key} is a password; keep it in the vault of ${group}, not in the inventory.`);
       }
       if (/[\r\n]/.test(value)) {
         errors.push(`${owner}: the value of ${key} must not contain a line break.`);
@@ -540,6 +540,9 @@ function validateInventory(inventory) {
   };
 
   for (const group of groups) {
+    if (group.readOnly) {
+      continue;
+    }
     if (!GROUP_NAME.test(group.name)) {
       errors.push(`"${group.name}" is not a valid group name. Ansible group names allow letters, digits and _.`);
     }
@@ -619,21 +622,24 @@ function inventoryHash(text) {
  * @returns {T[]}
  */
 function mergeEntries(onDisk, fromEdit, manualNames) {
-  const editable = fromEdit.filter((entry) => !entry.readOnly && !manualNames.has(entry.name));
   /** @type {T[]} */
-  const result = [];
-  let next = 0;
-  for (const entry of onDisk) {
-    if (entry.readOnly) {
-      result.push(entry);
-    } else {
-      const replacement = editable[next++];
-      if (replacement) {
-        result.push(replacement);
+  const result = fromEdit.filter((entry) => !entry.readOnly && !manualNames.has(entry.name));
+  // A read-only entry stays after the nearest disk neighbour that survives.
+  for (const [index, entry] of onDisk.entries()) {
+    if (!entry.readOnly) {
+      continue;
+    }
+    let at = 0;
+    for (let before = index - 1; before >= 0; before--) {
+      const name = onDisk[before]?.name;
+      const found = result.findIndex((item) => item.name === name);
+      if (found >= 0) {
+        at = found + 1;
+        break;
       }
     }
+    result.splice(at, 0, entry);
   }
-  result.push(...editable.slice(next));
   return result;
 }
 
@@ -664,14 +670,30 @@ function sameVars(before, after) {
 }
 
 /**
- * Keys that were added, removed or changed between two var lists.
+ * Keys whose values differ between two var lists (all occurrences compared).
  *
  * @param {Var[]} before
  * @param {Var[]} after
  */
 function changedKeys(before, after) {
   const keys = [...new Set([...before.map((entry) => entry[0]), ...after.map((entry) => entry[0])])];
-  return keys.filter((key) => before.find((entry) => entry[0] === key)?.[1] !== after.find((entry) => entry[0] === key)?.[1]);
+  /** @param {Var[]} vars @param {string} key */
+  const values = (vars, key) => JSON.stringify(vars.filter((entry) => entry[0] === key).map((entry) => entry[1]));
+  return keys.filter((key) => values(before, key) !== values(after, key));
+}
+
+/**
+ * Same members, different order.
+ *
+ * @param {string[]} before
+ * @param {string[]} after
+ */
+function reordered(before, after) {
+  return (
+    before.length === after.length &&
+    before.every((name) => after.includes(name)) &&
+    before.some((name, i) => name !== after[i])
+  );
 }
 
 /**
@@ -714,8 +736,12 @@ function describeChanges(before, after) {
       for (const host of group.hosts) {
         const was = old.hosts.find((item) => item.name === host.name);
         if (was && !sameVars(was.vars, host.vars)) {
-          lines.push(`${group.name}: ${host.name} changed (${changedKeys(was.vars, host.vars).join(", ")})`);
+          const keys = changedKeys(was.vars, host.vars);
+          lines.push(`${group.name}: ${host.name} changed (${keys.length > 0 ? keys.join(", ") : "order"})`);
         }
+      }
+      if (reordered(old.hosts.map((item) => item.name), group.hosts.map((item) => item.name))) {
+        lines.push(`${group.name}: hosts reordered`);
       }
       const oldChildren = "children" in old ? old.children : [];
       const children = "children" in group ? group.children : [];
@@ -725,6 +751,9 @@ function describeChanges(before, after) {
       for (const child of oldChildren.filter((name) => !children.includes(name))) {
         lines.push(`${group.name}: \u2212 ${child}`);
       }
+      if (reordered(oldChildren, children)) {
+        lines.push(`${group.name}: children reordered`);
+      }
       if (!sameVars(old.vars, group.vars)) {
         lines.push(`${group.name}:vars changed`);
       }
@@ -732,6 +761,13 @@ function describeChanges(before, after) {
   };
   compare("server group", before.serverGroups, after.serverGroups);
   compare("service", before.services, after.services);
+  /** @param {{ name: string }[]} list */
+  const nameList = (list) => list.map((item) => item.name);
+  if (
+    reordered(nameList(before.serverGroups), nameList(after.serverGroups)) ||
+    reordered(nameList(before.services), nameList(after.services))
+  ) {    lines.push("groups reordered");
+  }
   return lines;
 }
 
