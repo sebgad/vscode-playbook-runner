@@ -7,7 +7,17 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 
-const { MANUAL_BEGIN, MANUAL_END, parseInventory, serializeInventory } = require("../src/inventory");
+const {
+  MANUAL_BEGIN,
+  MANUAL_END,
+  describeChanges,
+  inventoryHash,
+  mergeEdits,
+  newInventoryText,
+  parseInventory,
+  serializeInventory,
+  validateInventory,
+} = require("../src/inventory");
 
 const SSH = "ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'";
 
@@ -203,5 +213,158 @@ describe("parseInventory / serializeInventory", () => {
     const text = serializeInventory(parsed);
     assert.equal(text, "[a]\r\nh1\r\n\r\n[a:vars]\r\nk=v\r\n");
     assert.ok(!/(?<!\r)\n/.test(text));
+  });
+});
+
+describe("validateInventory", () => {
+  /** @param {string} text */
+  const errors = (text) => validateInventory(parseInventory(text));
+
+  it("accepts host ranges and ports", () => {
+    assert.deepEqual(errors("[web]\nweb[01:10].example\ndb.example:2222 ansible_port=22\n"), []);
+  });
+
+  it("refuses password variables", () => {
+    const found = errors("[web]\nh1 ansible_password=x\n");
+    assert.equal(found.length, 1);
+    assert.match(found[0] ?? "", /vault/);
+    assert.match(found[0] ?? "", /web/);
+  });
+
+  it("refuses a child that does not exist", () => {
+    assert.equal(errors("[web]\nh1\n[svc:children]\nghost\n").length, 1);
+    assert.deepEqual(errors("[web]\nh1\n[svc:children]\nweb\n"), []);
+  });
+
+  it("refuses a service cycle", () => {
+    assert.equal(errors("[a:children]\nb\n[b:children]\na\n").length, 1);
+  });
+
+  it("refuses a group name used twice", () => {
+    const inventory = parseInventory("[web]\nh1\n[svc:children]\nweb\n");
+    const service = inventory.services[0];
+    assert.ok(service);
+    service.name = "web";
+    service.children = [];
+    assert.equal(validateInventory(inventory).length, 1);
+  });
+
+  it("refuses a newline in a value", () => {
+    const inventory = parseInventory("[web]\nh1\n");
+    inventory.serverGroups[0]?.hosts[0]?.vars.push(["k", "a\nb"]);
+    assert.equal(validateInventory(inventory).length, 1);
+  });
+
+  it("refuses a dash in a group name", () => {
+    const found = errors("[my-group]\nh1\n");
+    assert.equal(found.length, 1);
+    assert.match(found[0] ?? "", /letters, digits and _/);
+  });
+
+  it("accepts quoted non-string values", () => {
+    assert.deepEqual(errors("[web]\nh1 ansible_port='22'\n"), []);
+  });
+
+  it("refuses a host with vars in more than one group", () => {
+    assert.equal(errors("[a]\nh1 k=1\n[b]\nh1 k=2\n").length, 1);
+    assert.deepEqual(errors("[a]\nh1 k=1\n[b]\nh1\n"), []);
+  });
+
+  it("reports the parse error", () => {
+    assert.equal(errors(`${MANUAL_BEGIN}\n[a]\n`).length, 1);
+  });
+});
+
+describe("mergeEdits", () => {
+  const text = [
+    "[a]",
+    "h1",
+    "",
+    "[m]",
+    "hm",
+    MANUAL_BEGIN,
+    "[m:vars]",
+    "k=v",
+    MANUAL_END,
+    "",
+    "[b]",
+    "h2",
+    "",
+  ].join("\n");
+
+  it("keeps read-only groups from disk whatever the edit says", () => {
+    const disk = parseInventory(text);
+    const edited = parseInventory(text);
+    const readOnly = edited.serverGroups.find((group) => group.name === "m");
+    assert.ok(readOnly);
+    readOnly.vars.push(["x", "1"]);
+    edited.serverGroups.find((group) => group.name === "b")?.hosts.push({ name: "h3", vars: [] });
+    const merged = mergeEdits(disk, edited);
+    assert.deepEqual(
+      merged.serverGroups.map((group) => group.name),
+      disk.serverGroups.map((group) => group.name),
+    );
+    assert.deepEqual(merged.serverGroups.find((group) => group.name === "m")?.vars, []);
+    assert.equal(merged.serverGroups.find((group) => group.name === "b")?.hosts.length, 2);
+    assert.deepEqual(merged.manual, disk.manual);
+    assert.deepEqual(merged.manualGroups, disk.manualGroups);
+  });
+
+  it("ignores edited entries named in manualGroups", () => {
+    const disk = parseInventory(text);
+    const edited = parseInventory(text);
+    const copy = edited.serverGroups.find((group) => group.name === "m");
+    assert.ok(copy);
+    copy.readOnly = false;
+    const merged = mergeEdits(disk, edited);
+    assert.equal(merged.serverGroups.filter((group) => group.name === "m").length, 1);
+  });
+});
+
+describe("describeChanges", () => {
+  const base = "[podman_servers]\nh1 ansible_user=a\n[dns_servers]\nd1\n[immich:children]\npodman_servers\n";
+
+  it("describes host and child changes", () => {
+    const before = parseInventory(base);
+    const after = parseInventory(base);
+    after.serverGroups.find((group) => group.name === "podman_servers")?.hosts.push({ name: "h2", vars: [] });
+    after.services.find((service) => service.name === "immich")?.children.push("dns_servers");
+    assert.deepEqual(describeChanges(before, after), ["podman_servers: + host h2", "immich: + dns_servers"]);
+  });
+
+  it("describes removals, changed vars and whole groups", () => {
+    const before = parseInventory(base);
+    const after = parseInventory(base);
+    const podman = after.serverGroups.find((group) => group.name === "podman_servers");
+    podman?.hosts[0]?.vars.splice(0, 1, ["ansible_user", "b"]);
+    podman?.vars.push(["k", "v"]);
+    after.serverGroups = after.serverGroups.filter((group) => group.name !== "dns_servers");
+    after.services = [];
+    assert.deepEqual(describeChanges(before, after), [
+      "podman_servers: h1 changed (ansible_user)",
+      "podman_servers:vars changed",
+      "\u2212 server group dns_servers",
+      "\u2212 service immich",
+    ]);
+  });
+});
+
+describe("inventoryHash and newInventoryText", () => {
+  it("hash differs for different text and matches for equal text", () => {
+    assert.equal(inventoryHash("a"), inventoryHash("a"));
+    assert.notEqual(inventoryHash("a"), inventoryHash("b"));
+    assert.match(inventoryHash("a"), /^[0-9a-f]{64}$/);
+  });
+
+  it("new inventory text parses to an empty inventory with one manual block", () => {
+    const parsed = parseInventory(newInventoryText());
+    assert.deepEqual(parsed.serverGroups, []);
+    assert.deepEqual(parsed.services, []);
+    assert.equal(parsed.manual.length, 1);
+    assert.equal(parsed.error, null);
+    assert.equal(
+      newInventoryText(),
+      `# Edited by Playbook Runner. Text between these two marker lines is kept as written:\n${MANUAL_BEGIN}\n${MANUAL_END}\n`,
+    );
   });
 });

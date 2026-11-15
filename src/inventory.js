@@ -9,6 +9,8 @@
 
 "use strict";
 
+const crypto = require("node:crypto");
+
 /** @typedef {[string, string]} Var */
 /** @typedef {{ name: string, vars: Var[] }} Host */
 /** @typedef {{ name: string, hosts: Host[], vars: Var[], readOnly: boolean }} ServerGroup */
@@ -466,9 +468,288 @@ function serializeInventory(inventory) {
   return `${chunks.join("\n\n")}\n`.replace(/\n/g, inventory.eol);
 }
 
+const PASSWORD_VARS = new Set(["ansible_password", "ansible_ssh_pass", "ansible_become_pass", "ansible_become_password"]);
+
+const SSH_FIELDS = [
+  "ansible_host",
+  "ansible_user",
+  "ansible_port",
+  "ansible_ssh_private_key_file",
+  "ansible_ssh_common_args",
+];
+
+const GROUP_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const HOST_NAME = /^[A-Za-z0-9_.\-[\]:]+$/;
+const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Everything that stops an inventory from being saved; [] means savable.
+ *
+ * @param {Inventory} inventory
+ * @returns {string[]}
+ */
+function validateInventory(inventory) {
+  /** @type {string[]} */
+  const errors = [];
+  if (inventory.error) {
+    errors.push(inventory.error);
+  }
+  /** @type {(ServerGroup | Service)[]} */
+  const groups = [...inventory.serverGroups, ...inventory.services];
+
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  for (const group of groups) {
+    counts.set(group.name, (counts.get(group.name) || 0) + 1);
+  }
+  for (const name of inventory.manualGroups) {
+    // A read-only entry is the model's view of the manual group itself.
+    if (!groups.some((group) => group.readOnly && group.name === name)) {
+      counts.set(name, (counts.get(name) || 0) + 1);
+    }
+  }
+  for (const [name, count] of counts) {
+    if (count > 1) {
+      errors.push(`Group name "${name}" is used more than once.`);
+    }
+  }
+
+  /** @type {Map<string, string>} host -> first group where it has vars */
+  const hostVarGroups = new Map();
+  /** @type {Set<string>} */
+  const reportedHosts = new Set();
+  /**
+   * @param {string} group
+   * @param {Var[]} vars
+   * @param {string} owner
+   */
+  const checkVars = (group, vars, owner) => {
+    for (const [key, value] of vars) {
+      if (!VAR_NAME.test(key)) {
+        errors.push(`${owner}: "${key}" is not a valid variable name.`);
+      }
+      if (PASSWORD_VARS.has(key)) {
+        errors.push(
+          `${owner}: ${key} must not be written to the inventory; put it in the vault of group ${group} (group_vars/${group}/vault) instead.`,
+        );
+      }
+      if (/[\r\n]/.test(value)) {
+        errors.push(`${owner}: the value of ${key} must not contain a line break.`);
+      }
+    }
+  };
+
+  for (const group of groups) {
+    if (!GROUP_NAME.test(group.name)) {
+      errors.push(`"${group.name}" is not a valid group name. Ansible group names allow letters, digits and _.`);
+    }
+    checkVars(group.name, group.vars, `Group ${group.name}`);
+    for (const host of group.hosts) {
+      if (!HOST_NAME.test(host.name)) {
+        errors.push(`"${host.name}" is not a valid host name (group ${group.name}).`);
+      }
+      checkVars(group.name, host.vars, `Host ${host.name} in ${group.name}`);
+      if (host.vars.length > 0) {
+        const first = hostVarGroups.get(host.name);
+        if (first === undefined) {
+          hostVarGroups.set(host.name, group.name);
+        } else if (first !== group.name && !reportedHosts.has(host.name)) {
+          reportedHosts.add(host.name);
+          errors.push(`Host ${host.name} has variables in more than one group (${first}, ${group.name}); keep them in one.`);
+        }
+      }
+    }
+  }
+
+  const known = new Set([...groups.map((group) => group.name), ...inventory.manualGroups]);
+  for (const service of inventory.services) {
+    for (const child of service.children) {
+      if (!known.has(child)) {
+        errors.push(`Service ${service.name} lists "${child}" as a child, but no such group exists.`);
+      }
+    }
+  }
+
+  /** @type {Map<string, string[]>} */
+  const edges = new Map(inventory.services.map((service) => [service.name, service.children]));
+  /** @type {Set<string>} */
+  const done = new Set();
+  /** @type {Set<string>} */
+  const cyclic = new Set();
+  /**
+   * @param {string} name
+   * @param {string[]} trail
+   */
+  const visit = (name, trail) => {
+    if (trail.includes(name)) {
+      if (!cyclic.has(name)) {
+        cyclic.add(name);
+        errors.push(`Services form a cycle: ${[...trail.slice(trail.indexOf(name)), name].join(" -> ")}.`);
+      }
+      return;
+    }
+    if (done.has(name)) {
+      return;
+    }
+    for (const child of edges.get(name) || []) {
+      visit(child, [...trail, name]);
+    }
+    done.add(name);
+  };
+  for (const name of edges.keys()) {
+    visit(name, []);
+  }
+
+  return errors;
+}
+
+/** @param {string} text */
+function inventoryHash(text) {
+  return crypto.createHash("sha256").update(String(text), "utf8").digest("hex");
+}
+
+/**
+ * `disk` with its editable groups and services replaced by those of `edited`.
+ * Read-only entries and everything manual always come from disk.
+ *
+ * @template {ServerGroup | Service} T
+ * @param {T[]} onDisk
+ * @param {T[]} fromEdit
+ * @param {Set<string>} manualNames
+ * @returns {T[]}
+ */
+function mergeEntries(onDisk, fromEdit, manualNames) {
+  const editable = fromEdit.filter((entry) => !entry.readOnly && !manualNames.has(entry.name));
+  /** @type {T[]} */
+  const result = [];
+  let next = 0;
+  for (const entry of onDisk) {
+    if (entry.readOnly) {
+      result.push(entry);
+    } else {
+      const replacement = editable[next++];
+      if (replacement) {
+        result.push(replacement);
+      }
+    }
+  }
+  result.push(...editable.slice(next));
+  return result;
+}
+
+/**
+ * @param {Inventory} disk
+ * @param {{ serverGroups: ServerGroup[], services: Service[] }} edited
+ * @returns {Inventory}
+ */
+function mergeEdits(disk, edited) {
+  const manualNames = new Set(disk.manualGroups);
+  return {
+    serverGroups: mergeEntries(disk.serverGroups, edited.serverGroups, manualNames),
+    services: mergeEntries(disk.services, edited.services, manualNames),
+    manual: disk.manual,
+    manualGroups: disk.manualGroups,
+    warnings: disk.warnings,
+    error: disk.error,
+    eol: disk.eol,
+  };
+}
+
+/**
+ * @param {Var[]} before
+ * @param {Var[]} after
+ */
+function sameVars(before, after) {
+  return before.length === after.length && before.every((entry, i) => entry[0] === after[i]?.[0] && entry[1] === after[i]?.[1]);
+}
+
+/**
+ * Keys that were added, removed or changed between two var lists.
+ *
+ * @param {Var[]} before
+ * @param {Var[]} after
+ */
+function changedKeys(before, after) {
+  const keys = [...new Set([...before.map((entry) => entry[0]), ...after.map((entry) => entry[0])])];
+  return keys.filter((key) => before.find((entry) => entry[0] === key)?.[1] !== after.find((entry) => entry[0] === key)?.[1]);
+}
+
+/**
+ * Human-readable lines for what saving `after` over `before` changes.
+ *
+ * @param {Inventory} before
+ * @param {Inventory} after
+ * @returns {string[]}
+ */
+function describeChanges(before, after) {
+  /** @type {string[]} */
+  const lines = [];
+  /**
+   * @param {string} kind
+   * @param {(ServerGroup | Service)[]} was
+   * @param {(ServerGroup | Service)[]} now
+   */
+  const compare = (kind, was, now) => {
+    for (const group of now) {
+      if (!was.some((item) => item.name === group.name)) {
+        lines.push(`+ ${kind} ${group.name}`);
+      }
+    }
+    for (const old of was) {
+      const group = now.find((item) => item.name === old.name);
+      if (!group) {
+        lines.push(`\u2212 ${kind} ${old.name}`);
+        continue;
+      }
+      for (const host of group.hosts) {
+        if (!old.hosts.some((item) => item.name === host.name)) {
+          lines.push(`${group.name}: + host ${host.name}`);
+        }
+      }
+      for (const host of old.hosts) {
+        if (!group.hosts.some((item) => item.name === host.name)) {
+          lines.push(`${group.name}: \u2212 host ${host.name}`);
+        }
+      }
+      for (const host of group.hosts) {
+        const was = old.hosts.find((item) => item.name === host.name);
+        if (was && !sameVars(was.vars, host.vars)) {
+          lines.push(`${group.name}: ${host.name} changed (${changedKeys(was.vars, host.vars).join(", ")})`);
+        }
+      }
+      const oldChildren = "children" in old ? old.children : [];
+      const children = "children" in group ? group.children : [];
+      for (const child of children.filter((name) => !oldChildren.includes(name))) {
+        lines.push(`${group.name}: + ${child}`);
+      }
+      for (const child of oldChildren.filter((name) => !children.includes(name))) {
+        lines.push(`${group.name}: \u2212 ${child}`);
+      }
+      if (!sameVars(old.vars, group.vars)) {
+        lines.push(`${group.name}:vars changed`);
+      }
+    }
+  };
+  compare("server group", before.serverGroups, after.serverGroups);
+  compare("service", before.services, after.services);
+  return lines;
+}
+
+/** Text of a brand-new inventory file: just the empty manual block. */
+function newInventoryText() {
+  return `# Edited by Playbook Runner. Text between these two marker lines is kept as written:\n${MANUAL_BEGIN}\n${MANUAL_END}\n`;
+}
+
 module.exports = {
   MANUAL_BEGIN,
   MANUAL_END,
+  PASSWORD_VARS,
+  SSH_FIELDS,
+  describeChanges,
+  inventoryHash,
+  mergeEdits,
+  newInventoryText,
   parseInventory,
   serializeInventory,
+  validateInventory,
 };
