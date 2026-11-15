@@ -1,11 +1,45 @@
 # Playbook Runner
 
-A VS Code dashboard for running this repository's Ansible playbooks — whole,
-by tag, or a range of their tasks — and editing its vaults. Environments,
-playbooks and vaults are **discovered from the filesystem** — no path and no
-environment name is written down in the extension, so adding
-`inventories/lab/hosts.ini` or a new folder under `playbooks/` shows up without
-touching any code or config.
+A VS Code dashboard for running the Ansible playbooks in your workspace —
+whole, by tag, or a range of their tasks — and editing their vaults.
+Environments, playbooks and vaults are **discovered from the filesystem**, so
+adding `inventories/lab/hosts.ini` or a new folder under `playbooks/` shows up
+without touching any configuration.
+
+## Requirements
+
+* `ansible-playbook` and `ansible-vault` (ansible-core). Running a *range* of
+  tasks uses a strategy plugin that only runs on ansible-core 2.22 and refuses
+  other versions; whole-playbook and tag runs do not use it.
+* A Linux shell with GNU coreutils: playbooks are started through
+  `env -C <workspace folder> …`. On another OS, use VS Code's Remote — SSH,
+  WSL or Dev Containers to run the extension on a Linux machine.
+* Shell integration in that shell, for the run history to tell a passed run
+  from a failed one (without it, runs still start but show as *unknown*).
+
+## Repository layout
+
+The extension expects an Ansible repository laid out like this — every name
+here is a setting (see [Configuration](#configuration)), so a different layout
+needs only settings, not a fork:
+
+```
+ansible.cfg
+playbooks/
+  <service>/                      ← one folder per service, holding its *.yml playbooks
+inventories/
+  <environment>/                  ← any directory with a hosts.ini is an environment
+    hosts.ini
+    group_vars/
+      <service>/
+        env.yml                   ← plain variables
+        vault.yml                 ← ansible-vault encrypted variables
+roles/
+```
+
+A *service* is `playbooks/<name>/` and `group_vars/<name>/` shown as one
+thing; either half may be missing. Loose playbooks directly under
+`playbooks/` are listed as `(root)`.
 
 ## Dashboard
 
@@ -87,14 +121,15 @@ playbook as QuickPicks.
 
 `ansible-playbook` can start at a task (`--start-at-task`) but not stop at
 one, and starting skips every earlier task — including the ones that set the
-facts the rest of the play needs (`podman-user-setup`, here). So a range run
+facts the rest of the play needs. So a range run
 uses a strategy plugin that ships with the extension,
 `ansible/strategy/playbook_runner_range.py`,
 switched on for that one run through `ANSIBLE_STRATEGY` and
 `ANSIBLE_STRATEGY_PLUGINS`. It runs `linear` with a filter in front:
 
 * before the start: fact gathering, `include_*` tasks, and tasks tagged with
-  one of `playbookRunner.setupTags` (default `podman-user-setup`);
+  one of `playbookRunner.setupTags` (none by default — list the tags of
+  tasks that set facts later tasks rely on, e.g. `["user-setup"]`);
 * from the start until the end: everything;
 * after the end: only handlers already notified, so a changed template still
   restarts its service. Later plays are skipped.
@@ -172,7 +207,7 @@ Two things the confirmation says, because both are easy to get wrong:
 
 ## Adding a service
 
-*Playbook Runner: Create Service Skeleton…* (the ＋ folder button in the view title)
+*Playbook Runner: Create Service Skeleton…* (*New service…* in the dashboard's top bar)
 asks for a name and lays out the directories a service consists of:
 
 ```
@@ -234,15 +269,11 @@ about to do and waits for a confirmation; none of them runs ansible.
 Rename and delete are refused while a playbook is running against the
 environment, and delete refuses a symlinked environment directory.
 
-## Relation to the shell scripts
+## Without VS Code
 
-`scripts/run-ansible-playbooks.sh`, `scripts/edit-ansible-vaults.sh` and
-`scripts/create-ansible-vaults.sh` **have been removed** — the extension is now
-the only front end, and `.vscode/tasks.json` (which only wrapped them) is gone
-with them. Nothing is duplicated any more: a change to the repository layout
-means checking the settings below and nothing else.
-
-Without the editor, run `ansible-playbook` / `ansible-vault` directly:
+Nothing the extension does needs it at run time: it builds ordinary
+`ansible-playbook` / `ansible-vault` command lines (the run bar shows the exact
+one). Without the editor, run them directly:
 
 ```bash
 ansible-playbook -i inventories/production/hosts.ini \
@@ -300,9 +331,9 @@ Per environment, in this order:
    `${userHome}/.ansible-vault/${env}.pass`.
 3. If the resolved file does not exist → `--ask-vault-password`.
 
-Out of the box that reproduces today's behaviour: `staging` picks up
-`~/.ansible-vault/staging.pass` silently, `production` prompts. To stop
-production prompting, point it at the `prod.pass` you already have:
+So out of the box, an environment with a `~/.ansible-vault/<env>.pass` runs
+without asking, and one without is prompted for. To use a file with another
+name for one environment:
 
 ```jsonc
 "playbookRunner.vaultPasswordFiles": {
@@ -312,29 +343,18 @@ production prompting, point it at the `prod.pass` you already have:
 
 ## Install
 
-There is no build step — the extension ships the JavaScript it is written in.
-Two ways to install it:
-
-**As a package.** Build a `.vsix` and hand it to VS Code:
-
-```bash
-npm install          # dev tooling only; the extension itself has no dependencies
-npm run package      # -> dist/playbook-runner-<version>.vsix
-code --install-extension dist/playbook-runner-0.4.0.vsix
-```
-
-**As a symlink**, if you would rather have `git pull` be the update mechanism:
+Search for *Playbook Runner* in the Extensions view — it is published on the
+Visual Studio Marketplace and on Open VSX (VSCodium, Cursor and other
+VS Code-compatible editors). Or from a terminal:
 
 ```bash
-ln -s ~/Programmierprojekte/vscode-playbook-runner \
-      ~/.vscode/extensions/playbook-runner-0.4.0
+code --install-extension sebgad.playbook-runner
 ```
 
-An existing symlink from an older version keeps working; VS Code reads
-`package.json`, not the directory name. Run *Developer: Reload Window*
-afterwards. For VS Code Insiders or the Flatpak build, use
-`~/.vscode-insiders/extensions` or
-`~/.var/app/com.visualstudio.code/data/vscode/extensions` instead.
+Open a workspace whose folder holds the [layout above](#repository-layout) and
+click **Playbook Runner** in the status bar.
+
+To run it from source instead, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Configuration
 
@@ -356,56 +376,11 @@ own Settings editor.
 | `playbookRunner.confirmProduction` | `true` | Ask before running against a production environment. |
 | `playbookRunner.ansiblePlaybookCommand` ⁽ᵐ⁾ | `ansible-playbook` | Point at a virtualenv if ansible is not on `PATH`; a wrapper such as `uv run ansible-playbook` works too. |
 | `playbookRunner.ansibleVaultCommand` ⁽ᵐ⁾ | `ansible-vault` | |
-| `playbookRunner.setupTags` | `["podman-user-setup"]` | Tags whose tasks still run before the start of a task range, because later tasks need the facts they set. Empty makes *From task* behave like `--start-at-task`. |
+| `playbookRunner.setupTags` | `[]` | Tags whose tasks still run before the start of a task range, because later tasks need the facts they set. Empty makes *From task* behave like `--start-at-task`. |
 | `playbookRunner.serviceEnvironments` | `[]` | Environments *Create Service Skeleton…* lays a service out in. Empty means every environment; a name that is not an environment is skipped, never created. |
 
 ⁽ᵐ⁾ `machine` scope: user settings only, not settable by a workspace.
 
-The `homelab.*` and `homelabTasks.*` keys and command IDs of earlier versions
-are no longer read. Settings, keybindings and `tasks.json` entries
-(`"type": "homelab"`) written for them have to be renamed to
-`playbookRunner.*` (task type `playbook-runner`).
+## License
 
-## Development
-
-```
-extension.js        activation, commands, watchers
-src/discovery.js    filesystem scanning        ⟵ no `vscode` import, hence testable
-src/command.js      ansible argument vectors   ⟵ likewise
-src/defaults.js     the default of every setting, and their types
-src/paths.js        ${...} expansion, vault password and production rules  ⟵ likewise
-src/tags.js         the tags a playbook offers, read out of the YAML  ⟵ likewise
-src/scaffold.js     the paths a new service is laid out at  ⟵ likewise
-src/environments.js creating, renaming and removing an environment  ⟵ likewise
-src/settings.js     reading the settings out of vscode
-src/history.js      the run history  ⟵ likewise
-src/model.js        the dashboard model and the checks on its messages  ⟵ likewise
-src/runner.js       the runner and vault terminals
-src/tracker.js      recording runs in the history
-src/dashboard.js    the dashboard webview panel
-media/dashboard/    the dashboard page
-src/pickers.js      the QuickPick chain used by the palette commands
-```
-
-The modules marked above import nothing from `vscode`, which is what lets
-`node --test` cover the parts that decide what ends up on an ansible command
-line. The rest is the editor surface.
-
-`F5` opens an Extension Development Host with `../homelab-infra` loaded —
-the Ansible repository checked out beside this one; edit
-`.vscode/launch.json` to point it elsewhere. Logs land
-in *Help → Toggle Developer Tools → Console*.
-
-```bash
-npm install       # dev tooling: eslint, typescript, vsce
-npm run check     # lint + typecheck + tests, the one to run before committing
-npm run lint      # eslint
-npm run typecheck # tsc over the JSDoc types; nothing is emitted
-npm test          # node --test
-npm run package   # dist/playbook-runner-<version>.vsix
-```
-
-Types are JSDoc, checked with `tsc --noEmit` under `strict`; there is no
-compile step and nothing is generated. `npm install` brings in dev tooling
-only — the extension itself has no runtime dependencies, which is why
-`npm run package` passes `--no-dependencies`.
+[MIT](LICENSE)

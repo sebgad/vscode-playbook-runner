@@ -1,5 +1,5 @@
 # Everything that is development-only. What ships is extension.js, src/,
-# media/, package.json and the README.
+# media/, ansible/, package.json, the README, the CHANGELOG and the LICENSE.
 .vscode/**
 .claude/**
 docs/**
@@ -14,3 +14,5 @@ tsconfig.json
 workflow.md
 **/*.map
 **/__pycache__/**
+CLAUDE.md
+CONTRIBUTING.md

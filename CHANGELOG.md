@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+* **Ready for the Marketplace and Open VSX**: MIT licensed, listed as a
+  preview, and the README now starts with the requirements and the repository
+  layout the extension expects; building from source moved to
+  `CONTRIBUTING.md`.
+
+* **Breaking:** `playbookRunner.setupTags` now defaults to `[]` instead of
+  `["podman-user-setup"]`, a tag only one repository had. If your task ranges
+  relied on it, set it in the workspace's `.vscode/settings.json`:
+  `"playbookRunner.setupTags": ["podman-user-setup"]`.
+
 * **Environments can be created, renamed and deleted** from the dashboard
   (＋, ✎ and 🗑 beside the environment tabs) and the palette. A new one is
   empty or takes the group structure of an existing one — group names and

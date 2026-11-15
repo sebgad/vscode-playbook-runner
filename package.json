@@ -4,11 +4,16 @@
   "description": "Run Ansible playbooks and manage vaults from a dashboard, discovered from the filesystem.",
   "version": "0.4.0",
   "publisher": "sebgad",
-  "private": true,
+  "license": "MIT",
+  "preview": true,
   "repository": {
     "type": "git",
     "url": "https://github.com/sebgad/vscode-playbook-runner.git"
   },
+  "bugs": {
+    "url": "https://github.com/sebgad/vscode-playbook-runner/issues"
+  },
+  "homepage": "https://github.com/sebgad/vscode-playbook-runner#readme",
   "engines": {
     "vscode": "^1.93.0"
   },
@@ -18,7 +23,10 @@
   "keywords": [
     "ansible",
     "playbook",
-    "vault"
+    "vault",
+    "ansible-vault",
+    "inventory",
+    "devops"
   ],
   "icon": "media/icon.png",
   "main": "./extension.js",
@@ -212,9 +220,7 @@
         },
         "playbookRunner.setupTags": {
           "type": "array",
-          "default": [
-            "podman-user-setup"
-          ],
+          "default": [],
           "uniqueItems": true,
           "items": {
             "type": "string"

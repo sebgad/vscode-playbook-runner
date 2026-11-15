@@ -56,8 +56,8 @@ const DEFAULTS = {
   serviceEnvironments: [],
 
   // Tags whose tasks still run before the start of a task range, because the
-  // tasks after it need the facts they set.
-  setupTags: ["podman-user-setup"],
+  // tasks after it need the facts they set. Empty: no tag is special.
+  setupTags: [],
 };
 
 module.exports = DEFAULTS;
