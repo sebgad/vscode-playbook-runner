@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+* **Get started from an empty folder**: the dashboard's "No Ansible
+  environments found" page has a *Get started…* button (also *Playbook
+  Runner: Get Started…*). It asks for a first environment and service and,
+  after one confirmation listing only what is missing, creates `ansible.cfg`
+  (left alone if present), `roles/`, a starter playbook, an inventory and an
+  empty `group_vars/<service>/env.yml`. The inventory contains `localhost`
+  (`ansible_connection=local`) in the service's group so the starter playbook
+  runs immediately instead of matching no hosts. Refused when an environment
+  already exists.
+
+* **New service… offers a starter playbook**: after the name it asks *Empty
+  folder* or *With a starter playbook* (`hosts: <service>`, one `ping` task
+  tagged `hello`). It still never adds hosts; if the group has none in an INI
+  inventory the confirmation says so. An existing playbook is never
+  overwritten.
+
 * **Ready for the Marketplace and Open VSX**: MIT licensed, listed as a
   preview, and the README now starts with the requirements and the repository
   layout the extension expects; building from source moved to

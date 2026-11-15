@@ -41,6 +41,21 @@ A *service* is `playbooks/<name>/` and `group_vars/<name>/` shown as one
 thing; either half may be missing. Loose playbooks directly under
 `playbooks/` are listed as `(root)`.
 
+### Starting from an empty folder
+
+With no environment in the folder the dashboard offers **Get started…** (or
+run *Playbook Runner: Get Started…*). It asks for the first environment's name
+and the first service's name, lists the paths that are missing, and after one
+confirmation creates the tree above: `ansible.cfg` (`roles_path` set to the
+roles directory; an existing one is left alone), `roles/`, a starter playbook
+at `playbooks/<service>/<service>.yml`, `inventories/<environment>/hosts.ini`
+and an empty `group_vars/<service>/env.yml`. The inventory puts `localhost`
+(`ansible_connection=local`) in the service's group, so ▶ on the starter
+playbook runs right away; replace `localhost` with your real hosts afterwards.
+The starter playbook is one task, *Check the connection*, running
+`ansible.builtin.ping`, tagged `hello`. The command is refused when the folder
+already has an environment, and the starter playbook opens when it is done.
+
 ## Dashboard
 
 The **`$(run-all) Playbook Runner`** item on the left of the status bar opens
@@ -208,7 +223,8 @@ Two things the confirmation says, because both are easy to get wrong:
 ## Adding a service
 
 *Playbook Runner: Create Service Skeleton…* (*New service…* in the dashboard's top bar)
-asks for a name and lays out the directories a service consists of:
+asks for a name, then *Empty folder* or *With a starter playbook*, and lays
+out the directories a service consists of:
 
 ```
 playbooks/<name>/                                  ← empty, ready for the playbook
@@ -228,6 +244,13 @@ inventories/staging/group_vars/<name>/env.yml      ← empty
   environment and its group_vars would never show up in the dashboard.
 * **Structure only.** The env files are created empty, and an env file that
   already exists is never touched — it is opened with `wx`, not truncated.
+* **Starter playbook** (*With a starter playbook*) also writes
+  `playbooks/<name>/<name>.yml`: `hosts: <name>`, one `ansible.builtin.ping`
+  task tagged `hello`. An existing playbook of that name is never overwritten.
+  The command **never adds hosts** to an existing inventory; when the new
+  group has no hosts in an INI inventory of an environment the service is
+  created in, the confirmation says so, because the playbook would match
+  nothing until you add some.
 * **No vault is created.** A `vault.yml` has to be written encrypted, so the
   new service shows **Create vault** in the dashboard, and
   `ansible-vault create` does it from there.

@@ -489,6 +489,18 @@ tree without a reload.
     and agent came along as plain copies; their history stays in
     homelab-infra. Earlier steps have since been updated to name paths relative
     to this repository.
+23. ✅ Get started and starter playbooks: an empty folder can be turned into a
+    runnable repository (`playbookRunner.getStarted`, the dashboard's empty
+    state), and *Create Service Skeleton…* can write a starter playbook. This
+    is the first time the extension writes a host, and the rule behind steps
+    11 and 21 -- never hosts -- is narrowed rather than dropped: only
+    `localhost`, and only into an inventory the command creates itself, so
+    the starter playbook has something to run against and nothing can reach a
+    machine the user did not name. An existing inventory is still never given
+    hosts; the service command only says, in its confirmation, when the new
+    group is empty in an INI inventory. Both commands share one plan/apply
+    step, show only the missing paths, and never overwrite an existing file
+    (`ansible.cfg`, a playbook).
 
 ## 10. Verification
 
