@@ -452,9 +452,7 @@ async function createServiceSkeleton(argument, refresh) {
     return;
   }
 
-  const detail = missing
-    .map((entry) => (entry.type === "directory" ? `${entry.relative}/` : entry.relative))
-    .join("\n");
+  const detail = describeMissing(plan);
   const notes = [];
   if (plan.unknownEnvironments.length) {
     notes.push(
@@ -471,7 +469,7 @@ async function createServiceSkeleton(argument, refresh) {
     notes.push(`Environments limited by playbookRunner.serviceEnvironments: ${plan.environments.join(", ")}.`);
   }
   if (start.starter) {
-    const hostless = environmentsWithoutGroup(root, settings, plan.name);
+    const hostless = environmentsWithoutGroup(root, settings, plan);
     if (hostless.length) {
       notes.push(
         `${plan.name}.yml runs on the ${plan.name} group, which has no hosts in ${hostless.join(", ")} yet.`,
@@ -488,35 +486,67 @@ async function createServiceSkeleton(argument, refresh) {
     return;
   }
 
-  try {
-    const { created } = scaffold.createSkeleton(plan);
-    refresh();
-    vscode.window.showInformationMessage(
-      `Playbook Runner: created ${created.length} ${created.length === 1 ? "entry" : "entries"} for ${plan.name}.`,
-    );
+  const created = applyPlan(plan, refresh, {
+    done: `for ${plan.name}.`,
+    failed: `create the skeleton for ${plan.name}`,
+  });
+  if (created) {
     await openStarter(plan, created);
-  } catch (err) {
-    vscode.window.showErrorMessage(
-      `Playbook Runner: could not create the skeleton for ${plan.name}: ${messageOf(err)}`,
-    );
   }
 }
 
 /**
- * The environments whose inventory has no hosts under `group`. YAML
+ * Create what a plan lists, refresh the dashboard and report it. The caller
+ * words the tail of the message and what failed.
+ *
+ * @param {{ entries: import("./src/scaffold").SkeletonEntry[] }} plan
+ * @param {() => void} refresh
+ * @param {{ done: string, failed: string }} wording  `done` follows "created N entries "; `failed` follows "could not "
+ * @returns {import("./src/scaffold").SkeletonEntry[] | undefined} what was created, undefined on failure
+ */
+function applyPlan(plan, refresh, wording) {
+  try {
+    const { created } = scaffold.createSkeleton(plan);
+    refresh();
+    vscode.window.showInformationMessage(
+      `Playbook Runner: created ${created.length} ${created.length === 1 ? "entry" : "entries"} ${wording.done}`,
+    );
+    return created;
+  } catch (err) {
+    vscode.window.showErrorMessage(`Playbook Runner: could not ${wording.failed}: ${messageOf(err)}`);
+    return undefined;
+  }
+}
+
+/**
+ * The entries a plan still has to create, one per line, for a confirmation.
+ *
+ * @param {{ entries: import("./src/scaffold").SkeletonEntry[] }} plan
+ * @returns {string}
+ */
+function describeMissing(plan) {
+  return plan.entries
+    .filter((entry) => !entry.exists)
+    .map((entry) => (entry.type === "directory" ? `${entry.relative}/` : entry.relative))
+    .join("\n");
+}
+
+/**
+ * The environments of the plan whose inventory has no hosts under the
+ * plan's service. YAML
  * inventories and unreadable files are skipped: the check is a line scan of
  * an INI file and says nothing about them.
  *
  * @param {string} root
  * @param {import("./src/defaults").Settings} settings
- * @param {string} group
+ * @param {import("./src/scaffold").SkeletonPlan} plan  only its environments are looked at
  * @returns {string[]}
  */
-function environmentsWithoutGroup(root, settings, group) {
+function environmentsWithoutGroup(root, settings, plan) {
   /** @type {string[]} */
   const names = [];
   for (const environment of findEnvironments(root, settings)) {
-    if (/\.ya?ml$/i.test(environment.inventory)) {
+    if (!plan.environments.includes(environment.name) || /\.ya?ml$/i.test(environment.inventory)) {
       continue;
     }
     let text;
@@ -525,7 +555,7 @@ function environmentsWithoutGroup(root, settings, group) {
     } catch {
       continue;
     }
-    if (!scaffold.groupHasHosts(text, group)) {
+    if (!scaffold.groupHasHosts(text, plan.name)) {
       names.push(environment.name);
     }
   }
@@ -592,10 +622,7 @@ async function getStarted(argument, refresh) {
     return;
   }
 
-  const missing = plan.entries.filter((entry) => !entry.exists);
-  const detail = missing
-    .map((entry) => (entry.type === "directory" ? `${entry.relative}/` : entry.relative))
-    .join("\n");
+  const detail = describeMissing(plan);
   const answer = await vscode.window.showInformationMessage(
     `Set up ${folder.name} for Ansible?`,
     {
@@ -608,15 +635,9 @@ async function getStarted(argument, refresh) {
     return;
   }
 
-  try {
-    const { created } = scaffold.createSkeleton(plan);
-    refresh();
-    vscode.window.showInformationMessage(
-      `Playbook Runner: created ${created.length} ${created.length === 1 ? "entry" : "entries"} in ${folder.name}.`,
-    );
+  const created = applyPlan(plan, refresh, { done: `in ${folder.name}.`, failed: `set up ${folder.name}` });
+  if (created) {
     await openStarter(plan, created);
-  } catch (err) {
-    vscode.window.showErrorMessage(`Playbook Runner: could not set up ${folder.name}: ${messageOf(err)}`);
   }
 }
 
@@ -661,10 +682,7 @@ async function createEnvironmentSkeleton(argument, refresh) {
     return;
   }
 
-  const missing = plan.entries.filter((entry) => !entry.exists);
-  const detail = missing
-    .map((entry) => (entry.type === "directory" ? `${entry.relative}/` : entry.relative))
-    .join("\n");
+  const detail = describeMissing(plan);
   const notes = [];
   if (plan.from) {
     notes.push(
@@ -686,17 +704,10 @@ async function createEnvironmentSkeleton(argument, refresh) {
     return;
   }
 
-  try {
-    const { created } = scaffold.createSkeleton(plan);
-    refresh();
-    vscode.window.showInformationMessage(
-      `Playbook Runner: created ${created.length} ${created.length === 1 ? "entry" : "entries"} for ${plan.name}. Add its hosts to ${settings.inventoryFile}, then create its vaults.`,
-    );
-  } catch (err) {
-    vscode.window.showErrorMessage(
-      `Playbook Runner: could not create the environment ${plan.name}: ${messageOf(err)}`,
-    );
-  }
+  applyPlan(plan, refresh, {
+    done: `for ${plan.name}. Add its hosts to ${settings.inventoryFile}, then create its vaults.`,
+    failed: `create the environment ${plan.name}`,
+  });
 }
 
 /**
