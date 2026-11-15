@@ -65,7 +65,7 @@ palette). While playbooks run it reads `· N running`; the status bar item next
 to it shows the newest run and runs it again on click.
 
 ```
-┌ Playbook Runner        ↻ Re-run last  ⊕ New service…  ⚿ Rekey vaults  [● production] [● staging] ┐
+┌ Playbook Runner  Runs|Settings|Inventory  ↻ Re-run last  ⊕ New service…  ⚿ Rekey vaults  [● production] [● staging] ┐
 │ ⚠ production — runs here ask for confirmation before they start.                                │
 ├──────────────────┬───────────────────────────────────────────────────────────────────────────────┤
 │ Filter services  │ authentik   1 playbook   env.yml   🔒 Edit vault                              │
@@ -114,9 +114,9 @@ to it shows the newest run and runs it again on click.
   it, ＋ lays out a new one — see
   [Adding, renaming and deleting an environment](#adding-renaming-and-deleting-an-environment).
 * **The Inventory tab** (*Runs | Settings | Inventory*) edits the environment's
-  `hosts.ini` — see [Editing the inventory](#editing-the-inventory).
-* **The Settings tab** (top left: *Runs | Settings | Inventory*) shows every setting below
-  with its description and where its value comes from (default, User or
+  inventory file — see [Editing the inventory](#editing-the-inventory).
+* **The Settings tab** (top left: *Runs | Settings | Inventory*) shows every
+  setting below with its description and where its value comes from (default, User or
   Workspace), with an editor that fits it — text, on/off, a list, or
   environment → password file rows — and *Reset*. A change is saved to this
   workspace's `.vscode/settings.json`; *Move to User settings* moves a value to
@@ -149,6 +149,20 @@ has three parts:
 * **Services (access control)** — groups with a `[service:children]` section,
   where you tick which server groups belong to the service.
 * **Manual sections** — see below.
+
+```
+┌ Inventory · inventories/staging/hosts.ini                              Open in editor ┐
+│ SERVICES (access control)                                                             │
+│   immich     ☑ podman_servers  ☐ dns_servers                      Vault  …            │
+│ SERVER GROUPS                                                                         │
+│ ▾ podman_servers                                                      Vault  …        │
+│     web1   ansible_host 10.0.0.5  user admin  port 22                                 │
+│     GROUP VARIABLES  Variable [   ] = [   ]                                           │
+│ MANUAL SECTIONS   [legacy] …                                          Open in editor  │
+├───────────────────────────────────────────────────────────────────────────────────────┤
+│ ⚠ warnings the save will cause                      ● unsaved changes  Discard  Save staging │
+└───────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 Nothing is written until *Save*, which first asks for confirmation and lists
 what the rewrite changes. *Show diff* there opens a diff and then asks, without

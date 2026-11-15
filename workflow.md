@@ -518,9 +518,11 @@ tree without a reload.
     dashboard's save action in `extension.js`
     refuses while an editor has unsaved edits, a playbook runs against the
     environment, or the file changed since the page loaded (`inventoryHash`).
-    This drops the rule of steps 21 and 23 that an existing inventory is never
-    given hosts: the extension now writes hosts the user typed into an existing
-    inventory. Step 21's rule for a *new environment modelled on another* --
+    This drops step 21's rule that an existing inventory is never given hosts
+    and step 23's narrowing of it (only `localhost`, only into an inventory the
+    command creates itself): the extension now writes hosts the user typed into
+    an existing inventory. *Create inventory* still writes only the marker
+    skeleton, no hosts. Step 21's rule for a *new environment modelled on another* --
     no copied hosts -- still holds. Group rename and delete cover server
     groups and services and carry `group_vars/<name>/` and the children entries
     along; file-form group vars and manual blocks naming the group are only
