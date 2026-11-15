@@ -115,8 +115,11 @@ another* gets no copied hosts still holds.
   3. every service: `[s:children]` then its members, then `[s:vars]` if any;
   4. sections separated by one blank line, file ends with one newline.
   Order within each list is the model's order (file order for existing groups,
-  appended for new ones). Values containing whitespace, `'` or `"` are quoted
-  (single quotes unless the value contains one). Manual blocks are written
+  appended for new ones). On host lines, values containing whitespace, `'` or
+  `"` are quoted (single quotes unless the value contains one); `[g:vars]`
+  values are written verbatim, as Ansible reads the rest of the line there.
+  Every non-manual server group except `all` gets its `[g]` header, since
+  Ansible rejects a `[g:vars]` for an undefined group. Manual blocks are written
   after the section named by `after` (or at the top), in original order; if
   that section no longer exists, after the nearest earlier surviving anchor.
 * `validateInventory(inventory, manualGroups) → string[]` — errors, empty if
