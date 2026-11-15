@@ -357,34 +357,31 @@ class DashboardPanel {
       return;
     }
     if (message.type === "saveInventory") {
-      const found = model.resolveEnvironmentRequest(this.model, message.folder, message.environment);
-      const target = found && this.discovered(found.folder.path, found.environment.name);
-      // Always answered: the page disables Save until it hears back.
-      /** @param {string | null} error @param {boolean} cancelled */
-      const answer = (error, cancelled) =>
-        void this.panel.webview.postMessage({
-          type: "inventoryResult",
-          folder: found ? found.folder.path : message.folder,
-          environment: found ? found.environment.name : message.environment,
-          error,
-          cancelled,
-        });
-      if (!found || !target) {
-        answer(null, true);
-        return;
-      }
+      // Answered exactly once, whatever happens: the page disables Save (with
+      // no timeout) until it hears back. The page's own folder and environment
+      // are echoed, as that is the key it waits under.
       /** @type {string | null | undefined} */
       let error;
       try {
-        error = await this.deps.actions.saveInventory(target, {
-          hash: message.hash,
-          serverGroups: message.serverGroups,
-          services: message.services,
-        });
+        const found = model.resolveEnvironmentRequest(this.model, message.folder, message.environment);
+        const target = found && this.discovered(found.folder.path, found.environment.name);
+        error = target
+          ? await this.deps.actions.saveInventory(target, {
+              hash: message.hash,
+              serverGroups: message.serverGroups,
+              services: message.services,
+            })
+          : undefined;
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
       }
-      answer(error === undefined ? null : error, error === undefined);
+      void this.panel.webview.postMessage({
+        type: "inventoryResult",
+        folder: message.folder,
+        environment: message.environment,
+        error: error === undefined ? null : error,
+        cancelled: error === undefined,
+      });
       return;
     }
     if (message.type === "createInventory") {

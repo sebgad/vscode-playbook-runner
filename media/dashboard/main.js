@@ -42,7 +42,10 @@
    * @typedef {[string, string, boolean, boolean]} DraftVar
    * @typedef {{ name: string, vars: DraftVar[] }} Host
    * @typedef {{ uid: string, name: string, children: string[], hosts: Host[], vars: DraftVar[], readOnly: boolean, added: boolean }} Group
-   * @typedef {{ hash: string, serverGroups: Group[], services: Group[] }} Draft
+   * `revision` counts the edits made to a draft (mutate), so the answer to a
+   * save can tell whether the draft changed while the save was out.
+   *
+   * @typedef {{ hash: string, revision: number, serverGroups: Group[], services: Group[] }} Draft
    */
 
   const MAX_DRAFTS = 50;
@@ -185,7 +188,8 @@
       const serverGroups = restoreGroups(raw.serverGroups, uids);
       const services = restoreGroups(raw.services, uids);
       if (serverGroups && services) {
-        drafts.set(key, { hash: raw.hash, serverGroups, services });
+        const revision = Number.isSafeInteger(raw.revision) && raw.revision >= 0 ? raw.revision : 0;
+        drafts.set(key, { hash: raw.hash, revision, serverGroups, services });
       }
     }
     return drafts;
@@ -1597,8 +1601,6 @@
   const CAP_HOSTS = 500;
   const CAP_VARS = 200;
   const CAP_STRING = 4096;
-  /** How long Save stays disabled waiting for an answer that never comes. */
-  const SAVE_TIMEOUT_MS = 60000;
 
   /** @type {Map<string, string>} draft key -> why the last save was refused */
   const inventoryErrors = new Map();
@@ -1608,8 +1610,21 @@
   const openHosts = new Set();
   /** @type {string | null} the group whose ⋯ menu is open */
   let openMenu = null;
-  /** @type {Map<string, { hash: string, timer: ReturnType<typeof setTimeout> }>} saves waiting for an answer */
+  /**
+   * Saves waiting for an answer (the extension always sends exactly one), by
+   * draft key: the hash saved against.
+   *
+   * @type {Map<string, { hash: string }>}
+   */
   const saving = new Map();
+  /**
+   * The draft each save sent and its revision then. A successful answer drops
+   * the draft only if it is still that draft at that revision; edits made
+   * after the wait ended (the file changed under the dialog) are kept.
+   *
+   * @type {Map<string, { draft: Draft, revision: number }>}
+   */
+  const sentDrafts = new Map();
 
   /** @param {any} folder @param {any} environment */
   function draftKey(folder, environment) {
@@ -1645,11 +1660,7 @@
 
   /** @param {string} key */
   function stopSaving(key) {
-    const pending = saving.get(key);
-    if (pending) {
-      clearTimeout(pending.timer);
-      saving.delete(key);
-    }
+    saving.delete(key);
   }
 
   /** A new model ends the wait of a save whose file has changed (or gone). */
@@ -1740,6 +1751,7 @@
     if (!draft) {
       draft = {
         hash: ctx.inventory.hash,
+        revision: 0,
         serverGroups: ctx.inventory.serverGroups.map(copyGroup),
         services: ctx.inventory.services.map(copyGroup),
       };
@@ -1749,6 +1761,7 @@
     state.drafts.set(ctx.key, draft);
     boundDrafts();
     change(draft);
+    draft.revision++;
     persist();
     render();
   }
@@ -1977,10 +1990,16 @@
         if (problem) {
           problems.push(`Group ${label}: ${problem}`);
         }
-        for (const [key] of sentVars(host.vars)) {
+        for (const [key, value] of sentVars(host.vars)) {
           const varIssue = varProblem(key, group.name);
           if (varIssue) {
             problems.push(`${owner}: ${varIssue}`);
+          }
+          if (value.includes("'") && value.includes('"') && !isWrapped(value)) {
+            // Same wording as validateInventory (src/inventory.js).
+            problems.push(
+              `Host ${host.name} in ${group.name}: the value of ${key} contains both ' and " quotes, which a host line cannot hold; use one quote kind, or set it in a vars section.`,
+            );
           }
         }
         for (const key of repeatedKeys(host.vars)) {
@@ -1990,6 +2009,22 @@
     }
     problems.push(...capProblems(savePayload(ctx.draft)));
     return [...new Set(problems)];
+  }
+
+  /**
+   * A host-line value written as is: wrapped in quotes it does not contain
+   * unescaped inside (isWrapped in src/inventory.js).
+   *
+   * @param {string} value
+   */
+  function isWrapped(value) {
+    const first = value.charAt(0);
+    return (
+      value.length >= 2 &&
+      (first === "'" || first === '"') &&
+      value.endsWith(first) &&
+      !new RegExp(`(?<!\\\\)${first}`).test(value.slice(1, -1))
+    );
   }
 
   /** @param {string | null} text */
@@ -2783,6 +2818,7 @@
               state.drafts.delete(ctx.key);
               inventoryErrors.delete(ctx.key);
               stopSaving(ctx.key);
+              sentDrafts.delete(ctx.key);
               openMenu = null;
               persist();
               render();
@@ -2805,13 +2841,8 @@
               }
               inventoryErrors.delete(ctx.key);
               const key = ctx.key;
-              saving.set(key, {
-                hash: ctx.inventory.hash,
-                timer: setTimeout(() => {
-                  saving.delete(key);
-                  render();
-                }, SAVE_TIMEOUT_MS),
-              });
+              saving.set(key, { hash: ctx.inventory.hash });
+              sentDrafts.set(key, { draft, revision: draft.revision });
               vscode.postMessage({
                 type: "saveInventory",
                 folder: ctx.folder.path,
@@ -3009,12 +3040,14 @@
       }
       const key = `${message.folder}\n${message.environment}`;
       stopSaving(key);
+      const sent = sentDrafts.get(key);
+      sentDrafts.delete(key);
+      const draft = state.drafts.get(key);
       if (message.cancelled === true) {
         // Not saved and nothing wrong (the confirmation was declined): the draft stays.
-      } else if (message.error === null) {
+      } else if (message.error === null && (!draft || (sent && sent.draft === draft && sent.revision === draft.revision))) {
         // Saved, or nothing to save: the file on disk is the truth again.
         // Groups added and open stay open under the uid they now have.
-        const draft = state.drafts.get(key);
         for (const group of draft ? [...draft.serverGroups, ...draft.services] : []) {
           if (group.added && openGroups.has(`${key}\n${group.uid}`)) {
             openGroups.add(`${key}\nn:${group.name}`);
@@ -3023,6 +3056,10 @@
         state.drafts.delete(key);
         inventoryErrors.delete(key);
         persist();
+      } else if (message.error === null) {
+        // Saved, but the draft was edited after it was sent: those edits stay,
+        // frozen against the new file, to copy from or discard.
+        inventoryErrors.delete(key);
       } else if (typeof message.error === "string") {
         inventoryErrors.set(key, message.error);
       }
