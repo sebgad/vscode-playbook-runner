@@ -8,6 +8,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const path = require("node:path");
 const { after, before, describe, it } = require("node:test");
 
@@ -431,6 +432,10 @@ describe("inventory in the dashboard model", () => {
         "inventories/empty/",
         ["playbooks/web/site.yml", "- hosts: all\n  tasks: []\n"],
         ["playbooks/app/app.yml", "- hosts: all\n  tasks: []\n"],
+        "inventories/staging/group_vars/all/env.yml",
+        "inventories/staging/group_vars/x/env.yml",
+        ["inventories/broken/hosts.ini", "# playbook-runner: manual begin\n[a]\n"],
+        "inventories/dirinv/hosts.ini/",
       ],
       { prefix: "playbook-runner-invmodel-" },
     );
@@ -448,7 +453,7 @@ describe("inventory in the dashboard model", () => {
     assert.equal(inv.services[0]?.name, "app");
     assert.deepEqual(inv.manualGroups, ["extra"]);
     assert.deepEqual(inv.manual, [{ line: 4, preview: "# my note" }]);
-    assert.deepEqual(folder.candidates.map((c) => c.name).sort(), ["empty", "lab"]);
+    assert.deepEqual(folder.candidates.map((c) => c.name).sort(), ["dirinv", "empty", "lab"]);
   });
 
   it("model marks a structured inventory not editable", () => {
@@ -456,7 +461,7 @@ describe("inventory in the dashboard model", () => {
     const model = buildDashboardModel([{ name: "r", path: root }], () => settings, []);
     const inv = required(model.folders[0]?.environments.find((e) => e.name === "lab"), "lab").inventory;
     assert.equal(inv.editable, false);
-    assert.ok(inv.reason);
+    assert.equal(inv.reason, "Editing is only supported for INI inventories.");
     assert.deepEqual(inv.serverGroups, []);
     assert.equal(inv.hash.length > 0, true);
   });
@@ -466,6 +471,51 @@ describe("inventory in the dashboard model", () => {
     const inv = required(model.folders[0]?.environments.find((e) => e.name === "staging"), "staging").inventory;
     assert.ok(inv.unlisted.includes("web"));
     assert.ok(!inv.unlisted.includes("app"));
+    assert.ok(!inv.unlisted.includes("all"));
+    assert.ok(!inv.unlisted.includes("x"));
+  });
+
+  it("model reports a parse error as the reason", () => {
+    const model = buildDashboardModel([{ name: "r", path: root }], () => ({ ...DEFAULTS }), []);
+    const inv = required(model.folders[0]?.environments.find((e) => e.name === "broken"), "broken").inventory;
+    assert.equal(inv.editable, false);
+    assert.match(String(inv.reason), /never closed/);
+    assert.notEqual(inv.hash, "");
+  });
+
+  it("model reports an unreadable inventory with an empty hash", () => {
+    const inventory = path.join(root, "inventories/staging/hosts.ini");
+    const hidden = inventory + ".bak";
+    fs.renameSync(inventory, hidden);
+    fs.mkdirSync(inventory);
+    try {
+      const settings = { ...DEFAULTS };
+      // discovery skips a directory, so go through the model's own reader
+      const { buildInventoryModel } = require("../src/model");
+      const inv = buildInventoryModel(inventory, []);
+      assert.equal(inv.editable, false);
+      assert.equal(inv.hash, "");
+      assert.equal(inv.reason, "hosts.ini is not a file.");
+      assert.ok(settings);
+      const missing = buildInventoryModel(path.join(root, "nope.ini"), []);
+      assert.equal(missing.editable, false);
+      assert.equal(missing.hash, "");
+      assert.ok(missing.reason);
+    } finally {
+      fs.rmdirSync(inventory);
+      fs.renameSync(hidden, inventory);
+    }
+  });
+
+  it("refuses a saveInventory with 501 children or a 4097-char string", () => {
+    const base = { type: "saveInventory", folder: "/f", environment: "e", hash: "h", serverGroups: [] };
+    const svc = (/** @type {unknown} */ children, name = "s") => ({ name, children, hosts: [], vars: [], readOnly: false });
+    assert.equal(
+      parseWebviewMessage({ ...base, services: [svc(Array.from({ length: 501 }, () => "g"))] }),
+      null,
+    );
+    assert.equal(parseWebviewMessage({ ...base, services: [svc([], "x".repeat(4097))] }), null);
+    assert.notEqual(parseWebviewMessage({ ...base, services: [svc(["g"], "x".repeat(4096))] }), null);
   });
 
   it("parses a saveInventory message field by field", () => {

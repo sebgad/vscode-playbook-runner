@@ -129,16 +129,16 @@ function lockedInventory(reason, hash) {
 function buildInventoryModel(file, playbookServices) {
   let text;
   try {
+    if (!fs.statSync(file).isFile()) {
+      return lockedInventory(`${path.basename(file)} is not a file.`, "");
+    }
     text = fs.readFileSync(file, "utf8");
   } catch (error) {
     return lockedInventory(error instanceof Error ? error.message : String(error), "");
   }
   const hash = inventoryHash(text);
   if (STRUCTURED_INVENTORY.has(path.extname(file).toLowerCase())) {
-    return lockedInventory(
-      `${path.basename(file)} is a structured inventory; only INI inventories can be edited here.`,
-      hash,
-    );
+    return lockedInventory("Editing is only supported for INI inventories.", hash);
   }
   const parsed = parseInventory(text);
   if (parsed.error) {
@@ -183,7 +183,7 @@ function buildDashboardModel(folders, readSettingsFor, history) {
           inventoryFile: environment.inventory,
           inventory: buildInventoryModel(
             environment.inventory,
-            services.map((service) => service.name),
+            services.filter((service) => service.playbooks.length > 0).map((service) => service.name),
           ),
           isProduction: isProductionName(settings, environment.name),
           services: services.map((service) => ({
@@ -683,6 +683,7 @@ function buildPreview(spec) {
 module.exports = {
   STATUS_FILE_PLACEHOLDER,
   buildDashboardModel,
+  buildInventoryModel,
   buildPreview,
   findOfferedPlaybook,
   parseWebviewMessage,
