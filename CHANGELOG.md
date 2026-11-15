@@ -57,8 +57,10 @@ made sense inside the repository it was written for.
   strategy plugin shipped with the extension does it; tasks tagged with one
   of `playbookRunner.setupTags` still run before the start. A range whose
   task is not in the playbook, or whose end comes before its start, is
-  refused before anything runs, as is one on a playbook with `serial:` or on
-  an ansible-core other than 2.22.
+  refused before anything runs, as is one on a playbook with `serial:`. The
+  plugin runs on any ansible-core 2.x (tested with 2.21 and 2.22) and refuses
+  another major version, or one whose `linear` strategy no longer has the
+  method it overrides.
 * `--step` is a run option, and *Run Playbook with Options…* is grouped into
   *Scope* and *Output* and stays open when focus moves elsewhere.
 * **Playbooks run in a reused *Playbook Runner* terminal.** The Python

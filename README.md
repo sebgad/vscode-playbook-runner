@@ -9,8 +9,9 @@ without touching any configuration.
 ## Requirements
 
 * `ansible-playbook` and `ansible-vault` (ansible-core). Running a *range* of
-  tasks uses a strategy plugin that only runs on ansible-core 2.22 and refuses
-  other versions; whole-playbook and tag runs do not use it.
+  tasks uses a strategy plugin that runs on ansible-core 2.x (tested with 2.21
+  and 2.22) and refuses other major versions; whole-playbook and tag runs do
+  not use it.
 * A Linux shell with GNU coreutils: playbooks are started through
   `env -C <workspace folder> …`. On another OS, use VS Code's Remote — SSH,
   WSL or Dev Containers to run the extension on a Linux machine.
@@ -165,9 +166,10 @@ line by hand would skip those checks, so the plugin refuses a replay before any
 task runs; use *Playbook Runner: Re-run Last* instead.
 
 The plugin overrides part of ansible-core's `linear` strategy, so an
-ansible-core upgrade can break it. It refuses to run on any ansible-core other
-than the ones it was tested with (2.22), and `npm test` runs it against the
-installed ansible-core on throwaway `localhost` playbooks.
+ansible-core upgrade can break it. It runs on any ansible-core 2.x (tested
+with 2.21 and 2.22), refuses another major version or an ansible-core whose
+`linear` strategy lacks the method it overrides, and `npm test` runs it
+against the installed ansible-core on throwaway `localhost` playbooks.
 
 `--step` is a run option too: ansible asks before each task in the terminal.
 

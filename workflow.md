@@ -501,6 +501,16 @@ tree without a reload.
     group is empty in an INI inventory. Both commands share one plan/apply
     step, show only the missing paths, and never overwrite an existing file
     (`ansible.cfg`, a playbook).
+24. ✅ the task-range plugin accepts any ansible-core 2.x instead of only the
+    releases it was tested with (2.22). Distributions and CI images ship
+    other 2.x minors (2.21 on both the author's machine and GitHub's runner),
+    and an exact-minor allowlist blocked ranges there entirely. This narrows
+    the step 13 guard rather than dropping it: another major version is still
+    refused, and so is an ansible-core whose `linear` strategy lacks
+    `_get_next_task_lockstep`. **The accepted cost:** a 2.x minor that keeps
+    that method but changes how it behaves is trusted untested; the range
+    banner and the status-file verdict for an edge that never matched remain
+    the signals. `test/range-plugin.test.js` was run against 2.21 and 2.22.
 
 ## 10. Verification
 

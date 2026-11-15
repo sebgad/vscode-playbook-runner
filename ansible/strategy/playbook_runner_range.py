@@ -40,20 +40,22 @@ from ansible.utils.display import Display
 
 display = Display()
 
-# The ansible-core releases test/range-plugin.test.js has passed against.
-# Anything else is refused rather than trusted: a renamed private method would
-# leave the override dead and `linear` would run the whole playbook.
-TESTED_VERSIONS = ("2.22",)
+# The ansible-core major version the plugin accepts (workflow.md step 24).
+# test/range-plugin.test.js has passed against 2.21 and 2.22; other 2.x
+# releases are trusted untested. A different major is refused: a renamed
+# private method would leave the override dead and `linear` would run the
+# whole playbook. The method check below still guards any 2.x.
+SUPPORTED_MAJOR = "2"
 
 
 def check_compatible(version):
-    """Raise unless this ansible-core is one the plugin was tested against and
-    still has the method it overrides."""
-    if not any(version == tested or version.startswith(tested + ".") for tested in TESTED_VERSIONS):
+    """Raise unless this ansible-core is a supported major version and still
+    has the method it overrides."""
+    if version.split(".", 1)[0] != SUPPORTED_MAJOR:
         raise AnsibleError(
-            "Playbook Runner: the task-range plugin was tested with ansible-core %s, not %s. "
+            "Playbook Runner: the task-range plugin supports ansible-core %s.x, not %s. "
             "Run the playbook without a task range, or update the plugin and its tests."
-            % (", ".join(TESTED_VERSIONS), version)
+            % (SUPPORTED_MAJOR, version)
         )
     if "_get_next_task_lockstep" not in vars(LinearStrategyModule):
         raise AnsibleError("Playbook Runner: this ansible-core's linear strategy has no _get_next_task_lockstep.")

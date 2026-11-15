@@ -262,7 +262,7 @@ describe("range strategy plugin", { skip: ANSIBLE ? false : "ansible-playbook no
     assert.match(result.stdout, /Playbook Runner/);
   });
 
-  it("refuses an ansible-core it was not tested against", () => {
+  it("accepts any ansible-core 2.x and refuses another major", () => {
     const python = path.join(path.dirname(String(ANSIBLE)), "python3");
     /** @param {string} version */
     const check = (version) =>
@@ -271,10 +271,14 @@ describe("range strategy plugin", { skip: ANSIBLE ? false : "ansible-playbook no
         ["-c", `import sys; sys.path.insert(0, ${JSON.stringify(PLUGIN_DIR)}); import playbook_runner_range as p; p.check_compatible(${JSON.stringify(version)})`],
         { encoding: "utf8" },
       );
-    assert.equal(check("2.22.0").status, 0, check("2.22.0").stderr);
-    const newer = check("2.23.0");
-    assert.notEqual(newer.status, 0);
-    assert.match(newer.stderr, /2\.23\.0/);
+    for (const accepted of ["2.22.0", "2.21.6", "2.23.0", "2.30.0b1"]) {
+      assert.equal(check(accepted).status, 0, `${accepted}: ${check(accepted).stderr}`);
+    }
+    for (const refused of ["3.0.0", "20.1.0", "1.9.6"]) {
+      const result = check(refused);
+      assert.notEqual(result.status, 0, refused);
+      assert.match(result.stderr, new RegExp(refused.replace(/\./g, "\\.")));
+    }
   });
 
   it("announces itself", async () => {
