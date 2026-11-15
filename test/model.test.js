@@ -27,7 +27,6 @@ const {
   resolveRunRequest,
   STATUS_FILE_PLACEHOLDER,
 } = require("../src/model");
-const { resolveVaultPasswordFile } = require("../src/paths");
 const { findPlaybookOutline } = require("../src/tags");
 const { makeFixture, removeFixture, required } = require("./helpers");
 
@@ -356,7 +355,9 @@ describe("dashboard model", () => {
 
   describe("buildPreview", () => {
     it("shows exactly the argv and env a run would get, with a placeholder status file", () => {
-      const settings = { ...DEFAULTS };
+      // No password file pattern: the default one points into the user's home,
+      // and whether ~/.ansible-vault/staging.pass exists must not decide this.
+      const settings = { ...DEFAULTS, vaultPasswordFilePattern: "" };
       const staging = environment("staging");
       const options = { fromTask: "r : in role", check: true };
       const outline = findPlaybookOutline(root, appFile);
@@ -374,10 +375,13 @@ describe("dashboard model", () => {
         buildPlaybookArgs({
           inventory: "inventories/staging/hosts.ini",
           playbook: "playbooks/app/app.yml",
-          vaultPasswordFile: resolveVaultPasswordFile(settings, "staging", root),
+          vaultPasswordFile: null,
+          // The fixture's vault.yml is not encrypted, so nothing asks for a password.
+          usesVault: false,
           options,
         }),
       );
+      assert.ok(!preview.argv.includes("--ask-vault-password"), preview.argv.join(" "));
       assert.deepEqual(
         preview.env,
         buildPlaybookEnv({
