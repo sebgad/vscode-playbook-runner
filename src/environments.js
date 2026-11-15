@@ -397,6 +397,7 @@ function planDelete(root, name, settings) {
 }
 
 module.exports = {
+  STRUCTURED_INVENTORY,
   inventoryGroupSkeleton,
   planDelete,
   planEnvironment,

@@ -18,6 +18,7 @@ const {
   buildPreview,
   findOfferedPlaybook,
   parseWebviewMessage,
+  resolveCandidateRequest,
   resolveEnvironmentRequest,
   resolveFolderRequest,
   resolveVaultRequest,
@@ -401,5 +402,133 @@ describe("dashboard model", () => {
       assert.match(String(preview.error), /not found|before/);
       assert.ok(preview.argv.length > 0);
     });
+  });
+});
+
+describe("inventory in the dashboard model", () => {
+  const HOSTS = [
+    "[podman_servers]",
+    "box1 ansible_host=10.0.0.1",
+    "",
+    "# playbook-runner: manual begin",
+    "",
+    "# my note",
+    "[extra]",
+    "x",
+    "# playbook-runner: manual end",
+    "",
+    "[app:children]",
+    "podman_servers",
+    "",
+  ].join("\n");
+  /** @type {string} */
+  let root;
+  before(() => {
+    root = makeFixture(
+      [
+        ["inventories/staging/hosts.ini", HOSTS],
+        ["inventories/lab/hosts.yml", "all:\n"],
+        "inventories/empty/",
+        ["playbooks/web/site.yml", "- hosts: all\n  tasks: []\n"],
+        ["playbooks/app/app.yml", "- hosts: all\n  tasks: []\n"],
+      ],
+      { prefix: "playbook-runner-invmodel-" },
+    );
+  });
+  after(() => removeFixture(root));
+
+  it("model carries the parsed inventory and its hash", () => {
+    const model = buildDashboardModel([{ name: "r", path: root }], () => ({ ...DEFAULTS }), []);
+    const folder = required(model.folders[0], "folder");
+    const inv = required(folder.environments.find((e) => e.name === "staging"), "staging").inventory;
+    assert.equal(inv.editable, true);
+    assert.equal(inv.reason, null);
+    assert.equal(inv.hash, require("../src/inventory").inventoryHash(HOSTS));
+    assert.equal(inv.serverGroups[0]?.name, "podman_servers");
+    assert.equal(inv.services[0]?.name, "app");
+    assert.deepEqual(inv.manualGroups, ["extra"]);
+    assert.deepEqual(inv.manual, [{ line: 4, preview: "# my note" }]);
+    assert.deepEqual(folder.candidates.map((c) => c.name).sort(), ["empty", "lab"]);
+  });
+
+  it("model marks a structured inventory not editable", () => {
+    const settings = { ...DEFAULTS, inventoryFile: "hosts.yml" };
+    const model = buildDashboardModel([{ name: "r", path: root }], () => settings, []);
+    const inv = required(model.folders[0]?.environments.find((e) => e.name === "lab"), "lab").inventory;
+    assert.equal(inv.editable, false);
+    assert.ok(inv.reason);
+    assert.deepEqual(inv.serverGroups, []);
+    assert.equal(inv.hash.length > 0, true);
+  });
+
+  it("model lists playbook services missing from the inventory", () => {
+    const model = buildDashboardModel([{ name: "r", path: root }], () => ({ ...DEFAULTS }), []);
+    const inv = required(model.folders[0]?.environments.find((e) => e.name === "staging"), "staging").inventory;
+    assert.ok(inv.unlisted.includes("web"));
+    assert.ok(!inv.unlisted.includes("app"));
+  });
+
+  it("parses a saveInventory message field by field", () => {
+    const message = parseWebviewMessage({
+      type: "saveInventory",
+      folder: "/f",
+      environment: "e",
+      hash: "h",
+      evil: 1,
+      serverGroups: [{ name: "g", hosts: [{ name: "h1", vars: [["a", "b"]], x: 1 }], vars: [["k", "v"]], readOnly: true, y: 2 }],
+      services: [{ name: "s", children: ["g"], hosts: [], vars: [], readOnly: true }],
+    });
+    assert.deepEqual(message, {
+      type: "saveInventory",
+      folder: "/f",
+      environment: "e",
+      hash: "h",
+      serverGroups: [{ name: "g", hosts: [{ name: "h1", vars: [["a", "b"]] }], vars: [["k", "v"]], readOnly: false }],
+      services: [{ name: "s", children: ["g"], hosts: [], vars: [], readOnly: false }],
+    });
+  });
+
+  it("refuses a saveInventory with a non-string var, a 3-tuple var or 501 groups", () => {
+    const base = { type: "saveInventory", folder: "/f", environment: "e", hash: "h", services: [] };
+    const group = (/** @type {unknown} */ vars) => ({ name: "g", hosts: [], vars, readOnly: false });
+    assert.equal(parseWebviewMessage({ ...base, serverGroups: [group([["a", 1]])] }), null);
+    assert.equal(parseWebviewMessage({ ...base, serverGroups: [group([["a", "b", "c"]])] }), null);
+    assert.equal(
+      parseWebviewMessage({ ...base, serverGroups: Array.from({ length: 501 }, () => group([])) }),
+      null,
+    );
+    assert.notEqual(parseWebviewMessage({ ...base, serverGroups: [group([["a", "b"]])] }), null);
+  });
+
+  it("parses createInventory, openInventory, renameGroup, deleteGroup", () => {
+    assert.deepEqual(parseWebviewMessage({ type: "createInventory", folder: "/f", candidate: "lab", z: 1 }), {
+      type: "createInventory",
+      folder: "/f",
+      candidate: "lab",
+    });
+    assert.deepEqual(parseWebviewMessage({ type: "openInventory", folder: "/f", environment: "e", line: 4 }), {
+      type: "openInventory",
+      folder: "/f",
+      environment: "e",
+      line: 4,
+    });
+    assert.equal(parseWebviewMessage({ type: "openInventory", folder: "/f", environment: "e", line: 0 }), null);
+    for (const type of ["renameGroup", "deleteGroup"]) {
+      assert.deepEqual(parseWebviewMessage({ type, folder: "/f", environment: "e", hash: "h", group: "g" }), {
+        type,
+        folder: "/f",
+        environment: "e",
+        hash: "h",
+        group: "g",
+      });
+    }
+  });
+
+  it("resolves a candidate by exact name and refuses ../b", () => {
+    const model = buildDashboardModel([{ name: "r", path: root }], () => ({ ...DEFAULTS }), []);
+    const found = resolveCandidateRequest(model, root, "lab");
+    assert.equal(found?.candidate.name, "lab");
+    assert.equal(resolveCandidateRequest(model, root, "../b"), null);
+    assert.equal(resolveCandidateRequest(model, "/nope", "lab"), null);
   });
 });
