@@ -30,6 +30,7 @@ These modules **never `require("vscode")`**:
 | `src/model.js` | the dashboard model and the checks on every webview message |
 | `src/scaffold.js` | the files *Create Service Skeleton* writes |
 | `src/environments.js` | creating, renaming and deleting an environment: the plans, the inventory group skeleton |
+| `src/inventory.js` | parsing and writing an INI inventory (hosts, SSH fields, group vars, service children, manual blocks), group rename/delete plans |
 
 That is what lets `node --test` cover everything that decides what ends up on an
 `ansible-playbook` command line. **Any logic that shapes a command line, a path

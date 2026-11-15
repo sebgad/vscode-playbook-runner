@@ -182,6 +182,28 @@ function findEnvironments(root, settings) {
 }
 
 /**
+ * @typedef {object} InventoryCandidate
+ * @property {string} name directory name under the inventories directory
+ * @property {string} dir
+ */
+
+/**
+ * Directories under `inventories/` that have no inventory file yet, so the
+ * Inventory tab can offer to create one.
+ *
+ * @param {string} root workspace folder path
+ * @param {Partial<import("./defaults").Settings>} [settings]
+ * @returns {InventoryCandidate[]}
+ */
+function findInventoryCandidates(root, settings) {
+  const config = withDefaults(settings);
+  const base = path.join(root, config.inventoriesDir);
+  return listDirectoryNames(base)
+    .map((name) => ({ name, dir: path.join(base, name) }))
+    .filter((candidate) => !isFile(path.join(candidate.dir, config.inventoryFile)));
+}
+
+/**
  * @typedef {object} PlaybookGroup
  * @property {string} name
  * @property {string} dir
@@ -324,10 +346,74 @@ function findServices(root, environment, settings) {
   });
 }
 
+/** The header every ansible-vault encrypted file and inline `!vault` value carries. */
+const VAULT_MARKER = "$ANSIBLE_VAULT;";
+/** Variable files are small; anything bigger is not read for the marker. */
+const MAX_SCANNED_FILE = 1024 * 1024;
+
+/**
+ * Whether anything in the environment's directory is vault-encrypted: a
+ * vault file, or a value encrypted inline with `!vault`, in group_vars,
+ * host_vars or anywhere else under the environment. A playbook run only asks
+ * for the vault passphrase when this is true -- ansible prompts for it
+ * whenever `--ask-vault-password` is given, encrypted content or not.
+ *
+ * Vault content outside the environment (a role's files, a playbook's own
+ * vars) is not seen; a configured password file still covers it.
+ *
+ * @param {{ dir: string }} environment
+ * @returns {boolean}
+ */
+function environmentUsesVault(environment) {
+  /** @type {Set<string>} */
+  const visited = new Set();
+
+  /** @param {string} current @returns {boolean} */
+  const walk = (current) => {
+    const real = realPathOrNull(current);
+    if (real === null || visited.has(real)) {
+      return false;
+    }
+    visited.add(real);
+
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (isDirectory(full)) {
+        if (walk(full)) {
+          return true;
+        }
+        continue;
+      }
+      const stat = statOrNull(full);
+      if (!stat || !stat.isFile() || stat.size > MAX_SCANNED_FILE) {
+        continue;
+      }
+      try {
+        if (fs.readFileSync(full, "utf8").includes(VAULT_MARKER)) {
+          return true;
+        }
+      } catch {
+        // Unreadable: nothing to decrypt from it either.
+      }
+    }
+    return false;
+  };
+
+  return walk(environment.dir);
+}
+
 module.exports = {
   DEFAULTS,
   ROOT_GROUP,
+  environmentUsesVault,
   findEnvironments,
+  findInventoryCandidates,
   findPlaybooks,
   findServices,
   findVaultGroups,

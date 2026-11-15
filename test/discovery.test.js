@@ -15,7 +15,9 @@ const { after, before, describe, it } = require("node:test");
 
 const {
   ROOT_GROUP,
+  environmentUsesVault,
   findEnvironments,
+  findInventoryCandidates,
   findPlaybooks,
   findServices,
   findVaultGroups,
@@ -290,5 +292,70 @@ describe("findVaultGroups", () => {
 
   it("returns nothing without an environment at all", () => {
     assert.deepEqual(findVaultGroups(undefined), []);
+  });
+});
+
+describe("findInventoryCandidates", () => {
+  it("lists inventory directories without an inventory file", () => {
+    const dir = makeFixture(["inventories/a/hosts.ini", "inventories/b/"], { prefix: "playbook-runner-candidates-" });
+    try {
+      assert.deepEqual(findInventoryCandidates(dir), [{ name: "b", dir: path.join(dir, "inventories", "b") }]);
+    } finally {
+      removeFixture(dir);
+    }
+  });
+});
+
+describe("environmentUsesVault", () => {
+  const ENCRYPTED = "$ANSIBLE_VAULT;1.1;AES256\n6131\n";
+
+  /** @param {(string | [string, string])[]} files */
+  const check = (files) => {
+    const root = makeFixture(["inventories/lab/hosts.ini", ...files]);
+    try {
+      const environment = required(findEnvironments(root)[0], "lab");
+      return environmentUsesVault(environment);
+    } finally {
+      removeFixture(root);
+    }
+  };
+
+  it("is false for an environment with plain variables only", () => {
+    assert.equal(check([["inventories/lab/group_vars/app/env.yml", "port: 80\n"]]), false);
+  });
+
+  it("is false without a group_vars directory", () => {
+    assert.equal(check([]), false);
+  });
+
+  it("is true for an encrypted vault file", () => {
+    assert.equal(check([["inventories/lab/group_vars/app/vault.yml", ENCRYPTED]]), true);
+  });
+
+  it("is true for a value encrypted inline with !vault", () => {
+    const inline = `db_password: !vault |\n  ${ENCRYPTED.replace("\n6131\n", "")}\n  6131\n`;
+    assert.equal(check([["inventories/lab/group_vars/app/env.yml", inline]]), true);
+  });
+
+  it("is true for vault content in host_vars too", () => {
+    assert.equal(check([["inventories/lab/host_vars/web1.yml", ENCRYPTED]]), true);
+  });
+
+  it("does not count an empty vault.yml as encrypted", () => {
+    assert.equal(check([["inventories/lab/group_vars/app/vault.yml", ""]]), false);
+  });
+
+  it("terminates on a symlink cycle", () => {
+    const root = makeFixture([
+      "inventories/lab/hosts.ini",
+      "inventories/lab/group_vars/app/",
+    ]);
+    try {
+      fs.symlinkSync(path.join(root, "inventories/lab"), path.join(root, "inventories/lab/group_vars/app/loop"));
+      const environment = required(findEnvironments(root)[0], "lab");
+      assert.equal(environmentUsesVault(environment), false);
+    } finally {
+      removeFixture(root);
+    }
   });
 });

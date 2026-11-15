@@ -10,6 +10,7 @@
 
 "use strict";
 
+const fs = require("fs");
 const path = require("path");
 
 const {
@@ -19,8 +20,10 @@ const {
   sanitizeRunOptions,
   validateTaskRange,
 } = require("./command");
-const { findEnvironments, findServices } = require("./discovery");
+const { environmentUsesVault, findEnvironments, findInventoryCandidates, findServices } = require("./discovery");
+const { STRUCTURED_INVENTORY } = require("./environments");
 const { latestFor } = require("./history");
+const { MANUAL_BEGIN, MANUAL_END, inventoryHash, parseInventory } = require("./inventory");
 const { isProductionName, resolveVaultPasswordFile } = require("./paths");
 
 /** What a preview shows for the status file, which only exists once a run starts. */
@@ -45,11 +48,31 @@ const STATUS_FILE_PLACEHOLDER = "<per-run status file>";
  */
 
 /**
+ * What the Inventory tab renders for one environment. When it is not
+ * editable (structured format, unreadable, unparsable) the lists are empty and
+ * `reason` says why. `preview` is the first line of a manual block that is
+ * neither a marker nor blank; `unlisted` the playbook-folder services that
+ * are no group in the inventory.
+ *
+ * @typedef {object} ModelInventory
+ * @property {boolean} editable
+ * @property {string | null} reason
+ * @property {string} hash
+ * @property {import("./inventory").ServerGroup[]} serverGroups
+ * @property {import("./inventory").Service[]} services
+ * @property {string[]} manualGroups
+ * @property {{ line: number, preview: string }[]} manual
+ * @property {string[]} warnings
+ * @property {string[]} unlisted
+ */
+
+/**
  * @typedef {object} ModelEnvironment
  * @property {string} name
- * @property {string} inventory
+ * @property {string} inventoryFile  path of the inventory file (was `inventory` before the tab)
  * @property {boolean} isProduction
  * @property {ModelService[]} services
+ * @property {ModelInventory} inventory
  */
 
 /**
@@ -57,12 +80,87 @@ const STATUS_FILE_PLACEHOLDER = "<per-run status file>";
  * @property {string} name
  * @property {string} path
  * @property {ModelEnvironment[]} environments
+ * @property {{ name: string, dir: string }[]} candidates  directories that could get an inventory
  */
 
 /**
  * @typedef {object} DashboardModel
  * @property {ModelFolder[]} folders
  */
+
+/**
+ * @param {string} text
+ * @returns {string}
+ */
+function manualPreview(text) {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed && trimmed !== MANUAL_BEGIN && trimmed !== MANUAL_END) {
+      return trimmed;
+    }
+  }
+  return "";
+}
+
+/**
+ * @param {string} reason
+ * @param {string} hash
+ * @returns {ModelInventory}
+ */
+function lockedInventory(reason, hash) {
+  return {
+    editable: false,
+    reason,
+    hash,
+    serverGroups: [],
+    services: [],
+    manualGroups: [],
+    manual: [],
+    warnings: [],
+    unlisted: [],
+  };
+}
+
+/**
+ * @param {string} file
+ * @param {string[]} playbookServices names of the playbook-folder services
+ * @returns {ModelInventory}
+ */
+function buildInventoryModel(file, playbookServices) {
+  let text;
+  try {
+    if (!fs.statSync(file).isFile()) {
+      return lockedInventory(`${path.basename(file)} is not a file.`, "");
+    }
+    text = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    return lockedInventory(error instanceof Error ? error.message : String(error), "");
+  }
+  const hash = inventoryHash(text);
+  if (STRUCTURED_INVENTORY.has(path.extname(file).toLowerCase())) {
+    return lockedInventory("Editing is only supported for INI inventories.", hash);
+  }
+  const parsed = parseInventory(text);
+  if (parsed.error) {
+    return lockedInventory(parsed.error, hash);
+  }
+  const known = new Set([
+    ...parsed.serverGroups.map((group) => group.name),
+    ...parsed.services.map((service) => service.name),
+    ...parsed.manualGroups,
+  ]);
+  return {
+    editable: true,
+    reason: null,
+    hash,
+    serverGroups: parsed.serverGroups,
+    services: parsed.services,
+    manualGroups: parsed.manualGroups,
+    manual: parsed.manual.map((block) => ({ line: block.line, preview: manualPreview(block.text) })),
+    warnings: parsed.warnings,
+    unlisted: playbookServices.filter((name) => !known.has(name)),
+  };
+}
 
 /**
  * @param {{ name: string, path: string }[]} folders
@@ -77,11 +175,18 @@ function buildDashboardModel(folders, readSettingsFor, history) {
       return {
         name: folder.name,
         path: folder.path,
-        environments: findEnvironments(folder.path, settings).map((environment) => ({
+        candidates: findInventoryCandidates(folder.path, settings),
+        environments: findEnvironments(folder.path, settings).map((environment) => {
+          const services = findServices(folder.path, environment, settings);
+          return {
           name: environment.name,
-          inventory: environment.inventory,
+          inventoryFile: environment.inventory,
+          inventory: buildInventoryModel(
+            environment.inventory,
+            services.filter((service) => service.playbooks.length > 0).map((service) => service.name),
+          ),
           isProduction: isProductionName(settings, environment.name),
-          services: findServices(folder.path, environment, settings).map((service) => ({
+          services: services.map((service) => ({
             name: service.name,
             playbooks: service.playbooks.map((playbook) => ({
               file: playbook.file,
@@ -94,7 +199,8 @@ function buildDashboardModel(folders, readSettingsFor, history) {
             vaultFile: service.vars ? service.vars.vaultFile : null,
             envFile: service.vars && service.vars.hasEnv ? service.vars.envFile : null,
           })),
-        })),
+          };
+        }),
       };
     }),
   };
@@ -111,6 +217,10 @@ function buildDashboardModel(folders, readSettingsFor, history) {
  *   | { type: "getStarted", folder: string }
  *   | { type: "createEnvironment", folder: string }
  *   | { type: "renameEnvironment" | "deleteEnvironment", folder: string, environment: string }
+ *   | { type: "saveInventory", folder: string, environment: string, hash: string, serverGroups: import("./inventory").ServerGroup[], services: import("./inventory").Service[] }
+ *   | { type: "createInventory", folder: string, candidate: string }
+ *   | { type: "openInventory", folder: string, environment: string, line: number }
+ *   | { type: "renameGroup" | "deleteGroup", folder: string, environment: string, hash: string, group: string }
  *   | { type: "rerunLast" }
  *   | { type: "openSettings" }
  *   | { type: "setSetting", key: string, value: unknown, target: "workspace" | "user" }
@@ -125,6 +235,111 @@ function buildDashboardModel(folders, readSettingsFor, history) {
  */
 function allStrings(raw, keys) {
   return keys.every((key) => typeof raw[key] === "string");
+}
+
+const MAX_GROUPS = 500;
+const MAX_HOSTS = 500;
+const MAX_VARS = 200;
+const MAX_STRING = 4096;
+
+/**
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function boundedString(value) {
+  return typeof value === "string" && value.length <= MAX_STRING ? value : null;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {import("./inventory").Var[] | null}
+ */
+function parseVars(value) {
+  if (!Array.isArray(value) || value.length > MAX_VARS) {
+    return null;
+  }
+  /** @type {import("./inventory").Var[]} */
+  const vars = [];
+  for (const item of value) {
+    if (!Array.isArray(item) || item.length !== 2) {
+      return null;
+    }
+    const key = boundedString(item[0]);
+    const val = boundedString(item[1]);
+    if (key === null || val === null) {
+      return null;
+    }
+    vars.push([key, val]);
+  }
+  return vars;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {import("./inventory").Host[] | null}
+ */
+function parseHosts(value) {
+  if (!Array.isArray(value) || value.length > MAX_HOSTS) {
+    return null;
+  }
+  /** @type {import("./inventory").Host[]} */
+  const hosts = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      return null;
+    }
+    const name = boundedString(/** @type {Record<string, unknown>} */ (item).name);
+    const vars = parseVars(/** @type {Record<string, unknown>} */ (item).vars);
+    if (name === null || !vars) {
+      return null;
+    }
+    hosts.push({ name, vars });
+  }
+  return hosts;
+}
+
+/**
+ * Rebuild the groups of a saveInventory message. `readOnly` is always false:
+ * the extension takes read-only groups from the file, not from the page.
+ *
+ * @param {unknown} value
+ * @param {boolean} withChildren
+ * @returns {import("./inventory").Service[] | null}
+ */
+function parseGroups(value, withChildren) {
+  if (!Array.isArray(value) || value.length > MAX_GROUPS) {
+    return null;
+  }
+  /** @type {import("./inventory").Service[]} */
+  const groups = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      return null;
+    }
+    const raw = /** @type {Record<string, unknown>} */ (item);
+    const name = boundedString(raw.name);
+    const hosts = parseHosts(raw.hosts);
+    const vars = parseVars(raw.vars);
+    /** @type {string[]} */
+    const children = [];
+    if (withChildren) {
+      if (!Array.isArray(raw.children) || raw.children.length > MAX_GROUPS) {
+        return null;
+      }
+      for (const child of raw.children) {
+        const text = boundedString(child);
+        if (text === null) {
+          return null;
+        }
+        children.push(text);
+      }
+    }
+    if (name === null || !hosts || !vars) {
+      return null;
+    }
+    groups.push({ name, children, hosts, vars, readOnly: false });
+  }
+  return groups;
 }
 
 /**
@@ -188,6 +403,51 @@ function parseWebviewMessage(value) {
       // Only which environment; the new name is asked for by the extension.
       return allStrings(raw, ["folder", "environment"])
         ? { type: raw.type, folder: String(raw.folder), environment: String(raw.environment) }
+        : null;
+    case "saveInventory": {
+      if (!allStrings(raw, ["folder", "environment", "hash"])) {
+        return null;
+      }
+      const serverGroups = parseGroups(raw.serverGroups, false);
+      const services = parseGroups(raw.services, true);
+      if (!serverGroups || !services) {
+        return null;
+      }
+      return {
+        type: "saveInventory",
+        folder: String(raw.folder),
+        environment: String(raw.environment),
+        hash: String(raw.hash),
+        serverGroups: serverGroups.map(({ name, hosts, vars, readOnly }) => ({ name, hosts, vars, readOnly })),
+        services,
+      };
+    }
+    case "createInventory":
+      return allStrings(raw, ["folder", "candidate"])
+        ? { type: "createInventory", folder: String(raw.folder), candidate: String(raw.candidate) }
+        : null;
+    case "openInventory": {
+      const line = raw.line;
+      if (!allStrings(raw, ["folder", "environment"]) || !Number.isInteger(line) || Number(line) < 1) {
+        return null;
+      }
+      return {
+        type: "openInventory",
+        folder: String(raw.folder),
+        environment: String(raw.environment),
+        line: Number(line),
+      };
+    }
+    case "renameGroup":
+    case "deleteGroup":
+      return allStrings(raw, ["folder", "environment", "hash", "group"])
+        ? {
+            type: raw.type,
+            folder: String(raw.folder),
+            environment: String(raw.environment),
+            hash: String(raw.hash),
+            group: String(raw.group),
+          }
         : null;
     case "outline":
       return allStrings(raw, ["folder", "playbook"])
@@ -286,6 +546,18 @@ function resolveEnvironmentRequest(model, folderPath, environmentName) {
 }
 
 /**
+ * @param {DashboardModel} model
+ * @param {string} folderPath
+ * @param {string} candidateName
+ * @returns {{ folder: ModelFolder, candidate: { name: string, dir: string } } | null}
+ */
+function resolveCandidateRequest(model, folderPath, candidateName) {
+  const folder = resolveFolderRequest(model, folderPath);
+  const candidate = folder && folder.candidates.find((item) => item.name === candidateName);
+  return folder && candidate ? { folder, candidate } : null;
+}
+
+/**
  * The service a vault message names, when the action fits it: edit needs a
  * vault that exists, create one that does not -- ansible-vault create on an
  * existing file is refused by ansible, edit on a missing one opens nothing.
@@ -380,6 +652,8 @@ function playbookArgv(root, settings, environment, playbookFile, options) {
     inventory: path.relative(root, environment.inventory),
     playbook: path.relative(root, playbookFile),
     vaultPasswordFile: resolveVaultPasswordFile(settings, environment.name, root),
+    // The inventory's directory is the environment's.
+    usesVault: environmentUsesVault({ dir: path.dirname(environment.inventory) }),
     options,
   });
 }
@@ -388,12 +662,16 @@ function playbookArgv(root, settings, environment, playbookFile, options) {
  * What the dashboard's command line shows: the argv and the env a run with
  * these options would get, and why the run would be refused, if it would.
  *
- * @param {{ root: string, environment: { name: string, inventory: string }, playbookFile: string, settings: import("./defaults").Settings, options: import("./command").RunOptions, outline: import("./tags").PlaybookOutline, pluginDir: string }} spec
+ * @param {{ root: string, environment: { name: string, inventoryFile: string }, playbookFile: string, settings: import("./defaults").Settings, options: import("./command").RunOptions, outline: import("./tags").PlaybookOutline, pluginDir: string }} spec
  * @returns {{ argv: string[], env: Record<string, string>, error: string | null }}
  */
 function buildPreview(spec) {
   return {
-    argv: playbookArgv(spec.root, spec.settings, spec.environment, spec.playbookFile, spec.options),
+    argv: playbookArgv(
+      spec.root,
+      spec.settings,
+      { name: spec.environment.name, inventory: spec.environment.inventoryFile },
+      spec.playbookFile, spec.options),
     env: buildPlaybookEnv({
       options: spec.options,
       setupTags: spec.settings.setupTags,
@@ -407,10 +685,12 @@ function buildPreview(spec) {
 module.exports = {
   STATUS_FILE_PLACEHOLDER,
   buildDashboardModel,
+  buildInventoryModel,
   buildPreview,
   findOfferedPlaybook,
   parseWebviewMessage,
   playbookArgv,
+  resolveCandidateRequest,
   resolveEnvironmentRequest,
   resolveFolderRequest,
   resolveOpenRequest,

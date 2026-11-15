@@ -58,7 +58,7 @@ actually runs Ansible, in one step.
   * `ansible.cfg` — `[defaults]\nroles_path = <rolesDir>\n`
   * `<rolesDir>/`, `<playbooksDir>/<service>/` and the starter playbook
   * `<inventoriesDir>/<environment>/<inventoryFile>` containing
-    `[<service>]\nlocalhost ansible_connection=local ansible_python_interpreter="{{ ansible_playbook_python }}"\n`
+    `[<service>]\nlocalhost ansible_connection=local\n`
   * `<groupVarsDir>/<service>/<envFileName>` (empty) in that environment
   * validated with the existing `validateEnvironmentName` /
     `validateServiceName`; refused if the folder already has an environment.

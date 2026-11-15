@@ -15,7 +15,7 @@ const vscode = require("vscode");
 
 const { shellQuote } = require("./command");
 const DEFAULTS = require("./defaults");
-const { findEnvironments } = require("./discovery");
+const { findEnvironments, findInventoryCandidates } = require("./discovery");
 const model = require("./model");
 const { readSettings } = require("./settings");
 const settingsEdit = require("./settingsEdit");
@@ -101,6 +101,12 @@ function settingViews(context) {
  * @property {(node: object) => Promise<void>} createEnvironment
  * @property {(node: object) => Promise<void>} renameEnvironment
  * @property {(node: object) => Promise<void>} deleteEnvironment
+ * @property {(node: object, edited: { hash: string, serverGroups: import("./inventory").ServerGroup[], services: import("./inventory").Service[] }) => Promise<string | null | undefined>} saveInventory
+ *   the error for the page, null when saved or nothing changed, undefined when cancelled
+ * @property {(node: { folder: vscode.WorkspaceFolder, candidate: { name: string, dir: string } }) => Promise<void>} createInventory
+ * @property {(node: object, line: number) => Promise<void>} openInventory
+ * @property {(node: object, hash: string, group: string) => Promise<void>} renameGroup
+ * @property {(node: object, hash: string, group: string) => Promise<void>} deleteGroup
  * @property {() => Promise<void>} rerunLast
  */
 
@@ -347,6 +353,65 @@ class DashboardPanel {
       const target = found && this.discovered(found.folder.path, found.environment.name);
       if (target) {
         await this.deps.actions[message.type](target);
+      }
+      return;
+    }
+    if (message.type === "saveInventory") {
+      // Answered exactly once, whatever happens: the page disables Save (with
+      // no timeout) until it hears back. The page's own folder and environment
+      // are echoed, as that is the key it waits under.
+      /** @type {string | null | undefined} */
+      let error;
+      try {
+        const found = model.resolveEnvironmentRequest(this.model, message.folder, message.environment);
+        const target = found && this.discovered(found.folder.path, found.environment.name);
+        error = target
+          ? await this.deps.actions.saveInventory(target, {
+              hash: message.hash,
+              serverGroups: message.serverGroups,
+              services: message.services,
+            })
+          : undefined;
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+      }
+      void this.panel.webview.postMessage({
+        type: "inventoryResult",
+        folder: message.folder,
+        environment: message.environment,
+        error: error === undefined ? null : error,
+        cancelled: error === undefined,
+      });
+      return;
+    }
+    if (message.type === "createInventory") {
+      const found = model.resolveCandidateRequest(this.model, message.folder, message.candidate);
+      const workspaceFolder = found && workspaceFolderAt(found.folder.path);
+      if (!found || !workspaceFolder) {
+        return;
+      }
+      // The directory comes from discovery, never from the message or a stale model.
+      const candidate = findInventoryCandidates(found.folder.path, readSettings(workspaceFolder)).find(
+        (item) => item.name === found.candidate.name,
+      );
+      if (candidate) {
+        await this.deps.actions.createInventory({ folder: workspaceFolder, candidate });
+      }
+      return;
+    }
+    if (message.type === "openInventory") {
+      const found = model.resolveEnvironmentRequest(this.model, message.folder, message.environment);
+      const target = found && this.discovered(found.folder.path, found.environment.name);
+      if (target) {
+        await this.deps.actions.openInventory(target, message.line);
+      }
+      return;
+    }
+    if (message.type === "renameGroup" || message.type === "deleteGroup") {
+      const found = model.resolveEnvironmentRequest(this.model, message.folder, message.environment);
+      const target = found && this.discovered(found.folder.path, found.environment.name);
+      if (target) {
+        await this.deps.actions[message.type](target, message.hash, message.group);
       }
       return;
     }

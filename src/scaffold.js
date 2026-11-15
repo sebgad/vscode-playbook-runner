@@ -310,8 +310,8 @@ function planWorkspace(root, names, settings) {
   const inventoryDir = path.join(root, config.inventoriesDir, environment);
   add("directory", inventoryDir);
   const local = isYamlInventory(config.inventoryFile)
-    ? `all:\n  children:\n    ${JSON.stringify(service)}:\n      hosts:\n        localhost:\n          ansible_connection: local\n          ansible_python_interpreter: "{{ ansible_playbook_python }}"\n`
-    : `[${service}]\nlocalhost ansible_connection=local ansible_python_interpreter="{{ ansible_playbook_python }}"\n`;
+    ? `all:\n  children:\n    ${JSON.stringify(service)}:\n      hosts:\n        localhost:\n          ansible_connection: local\n`
+    : `[${service}]\nlocalhost ansible_connection=local\n`;
   add("file", path.join(inventoryDir, config.inventoryFile), local);
 
   const groupVars = path.join(inventoryDir, config.groupVarsDir, service);

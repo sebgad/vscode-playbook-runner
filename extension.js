@@ -33,6 +33,7 @@ const {
 const runner = require("./src/runner");
 const pickers = require("./src/pickers");
 const environments = require("./src/environments");
+const inventory = require("./src/inventory");
 const { isProductionName } = require("./src/paths");
 const scaffold = require("./src/scaffold");
 const { DashboardPanel, VIEW_TYPE } = require("./src/dashboard");
@@ -56,6 +57,7 @@ const LAST_RUN_KEY = "playbookRunner.lastRun";
  * @property {string} [envFile]
  * @property {string} [vaultFile]
  * @property {boolean} [hasVault]
+ * @property {{ name: string, dir: string }} [candidate]  a directory under inventoriesDir without an inventory file
  */
 
 /**
@@ -921,6 +923,496 @@ async function deleteEnvironmentCommand(tracker, argument, refresh) {
   }
 }
 
+/** The scheme of the read-only "after save" side of an inventory diff. */
+const INVENTORY_PREVIEW_SCHEME = "playbook-runner-inventory";
+
+/**
+ * Texts the diff preview serves, keyed by URI path. An entry lives as long as
+ * the save dialog that offered it.
+ *
+ * @type {Map<string, string>}
+ */
+const inventoryPreviews = new Map();
+
+/** @type {vscode.TextDocumentContentProvider} */
+const inventoryPreviewProvider = {
+  provideTextDocumentContent: (uri) => inventoryPreviews.get(uri.path) ?? "(This preview has expired; close this tab.)",
+};
+
+/**
+ * A modal question about rewriting an inventory, with "Show diff" next to
+ * `buttons`. Show diff opens the file against `next` and asks again, not
+ * modal so the diff can be read; dismissing that one cancels.
+ *
+ * @param {{ title: string, detail: string, buttons: string[], file: string, next: string, diffTitle: string, modal?: "information" | "warning" }} spec
+ * @returns {Promise<string | undefined>} the button chosen, or undefined
+ */
+async function confirmInventoryRewrite(spec) {
+  const show = spec.modal === "warning" ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
+  const previewPath = `/${crypto.randomUUID()}/${path.basename(spec.file)}`;
+  inventoryPreviews.set(previewPath, spec.next);
+  try {
+    /** @type {string | undefined} */
+    let answer = await show(spec.title, { modal: true, detail: spec.detail }, ...spec.buttons, "Show diff");
+    if (answer === "Show diff") {
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        vscode.Uri.file(spec.file),
+        vscode.Uri.from({ scheme: INVENTORY_PREVIEW_SCHEME, path: previewPath }),
+        spec.diffTitle,
+      );
+      answer = await show(spec.title, ...spec.buttons, "Cancel");
+    }
+    return answer !== undefined && spec.buttons.includes(answer) ? answer : undefined;
+  } finally {
+    inventoryPreviews.delete(previewPath);
+  }
+}
+
+/**
+ * Why an inventory cannot be changed from the dashboard right now, or null.
+ * Shown as a warning; the caller stops.
+ *
+ * @param {RunTracker} tracker
+ * @param {string} root
+ * @param {import("./src/discovery").Environment} environment
+ * @param {string} doing  e.g. "save its inventory"
+ * @returns {string | null}
+ */
+function inventoryBlocked(tracker, root, environment, doing) {
+  const relative = path.relative(root, environment.inventory);
+  /** @type {string | null} */
+  let reason = null;
+  if (tracker.isRunning(root, environment.name)) {
+    reason = `a playbook is running against ${environment.name}; ${doing} when the run has finished.`;
+  } else if (environments.STRUCTURED_INVENTORY.has(path.extname(environment.inventory).toLowerCase())) {
+    reason = `${relative} is not an INI inventory; edit it in the text editor.`;
+  }
+  if (reason) {
+    vscode.window.showWarningMessage(`Playbook Runner: ${reason}`);
+  }
+  return reason;
+}
+
+/**
+ * The inventory text as it is on disk, if it is still the version the
+ * dashboard showed (`hash`). Otherwise the user is told, the dashboard
+ * reloads, and the result carries the short reason.
+ *
+ * Called once before planning and again right before writing: a dialog can
+ * stay open while the file changes underneath it. An editor holding unsaved
+ * edits of the file refuses too -- the write would overwrite them, or they it.
+ *
+ * @param {string} root
+ * @param {import("./src/discovery").Environment} environment
+ * @param {string} hash
+ * @param {() => void} refresh
+ * @returns {{ text: string, error?: undefined } | { error: string }}
+ */
+function readUnchangedInventory(root, environment, hash, refresh) {
+  const relative = path.relative(root, environment.inventory);
+  const dirty = vscode.workspace.textDocuments.some(
+    (document) => document.isDirty && document.uri.scheme === "file" && document.uri.fsPath === environment.inventory,
+  );
+  if (dirty) {
+    vscode.window.showWarningMessage(
+      `Playbook Runner: ${relative} has unsaved changes in an editor; save or revert them first.`,
+    );
+    return { error: `${relative} has unsaved changes in an editor` };
+  }
+  let text;
+  try {
+    text = fs.readFileSync(environment.inventory, "utf8");
+  } catch (err) {
+    vscode.window.showErrorMessage(`Playbook Runner: could not read ${relative}: ${messageOf(err)}`);
+    return { error: `could not read ${relative}` };
+  }
+  if (inventory.inventoryHash(text) !== hash) {
+    vscode.window.showWarningMessage(
+      `Playbook Runner: ${relative} changed on disk; the dashboard has reloaded it.`,
+    );
+    refresh();
+    return { error: `${relative} changed on disk` };
+  }
+  return { text };
+}
+
+/**
+ * Save the dashboard's draft of one environment's inventory. Only the
+ * editable groups come from the page; manual blocks, manual groups and
+ * read-only entries are taken from the file on disk (mergeEdits), and the
+ * result must pass validateInventory before anything is asked or written.
+ *
+ * @param {RunTracker} tracker
+ * @param {unknown} argument
+ * @param {{ hash: string, serverGroups: import("./src/inventory").ServerGroup[], services: import("./src/inventory").Service[] }} edited
+ * @param {() => void} refresh
+ * @returns {Promise<string | null | undefined>} the error for the page, null when saved or nothing changed, undefined when cancelled
+ */
+async function saveInventoryCommand(tracker, argument, edited, refresh) {
+  const resolved = await resolveContext(asCommandNode(argument));
+  if (!resolved) {
+    return undefined;
+  }
+  const { folder, settings, environment } = resolved;
+  const root = folder.uri.fsPath;
+  const file = environment.inventory;
+  const relative = path.relative(root, file);
+
+  const blocked = inventoryBlocked(tracker, root, environment, "save its inventory");
+  if (blocked) {
+    return blocked;
+  }
+  const current = readUnchangedInventory(root, environment, edited.hash, refresh);
+  if (current.error !== undefined) {
+    return current.error;
+  }
+
+  const disk = inventory.parseInventory(current.text);
+  const merged = inventory.mergeEdits(disk, { serverGroups: edited.serverGroups, services: edited.services });
+  const errors = inventory.validateInventory(merged);
+  if (errors.length) {
+    vscode.window.showErrorMessage(`Playbook Runner: ${relative} was not saved: ${errors.join(" ")}`);
+    return errors.join(" ");
+  }
+  const next = inventory.serializeInventory(merged);
+  if (next === current.text) {
+    return null;
+  }
+
+  const changes = inventory.describeChanges(disk, merged);
+  const detail = [
+    changes.length ? changes.join("\n") : "Only the layout of the file changes.",
+    ...(disk.warnings.length ? [disk.warnings.join("\n")] : []),
+  ].join("\n\n");
+
+  const answer = await confirmInventoryRewrite({
+    title: `Save ${relative} for ${environment.name}?`,
+    detail,
+    buttons: ["Save"],
+    file,
+    next,
+    diffTitle: `${environment.name}: ${relative} ↔ after save`,
+  });
+  if (answer !== "Save") {
+    return undefined;
+  }
+
+  const count = changes.length;
+  const description = `${relative} (${count ? `${count} change${count === 1 ? "" : "s"}` : "layout only"})`;
+  if (!(await pickers.confirmProduction(settings, environment, description, { verb: "Save", button: "Save" }))) {
+    return undefined;
+  }
+
+  const again = readUnchangedInventory(root, environment, edited.hash, refresh);
+  if (again.error !== undefined) {
+    return again.error;
+  }
+  try {
+    fs.writeFileSync(file, next);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Playbook Runner: could not save ${relative}: ${messageOf(err)}`);
+    return `could not save ${relative}`;
+  }
+  refresh();
+  vscode.window.showInformationMessage(`Playbook Runner: saved ${relative}.`);
+  return null;
+}
+
+/**
+ * Give a directory under inventoriesDir an inventory file, which turns it
+ * into an environment. Never overwrites: the file is created with `wx`.
+ *
+ * @param {unknown} argument  { folder, candidate: { name, dir } }
+ * @param {() => void} refresh
+ */
+async function createInventoryCommand(argument, refresh) {
+  const { folder, candidate } = asCommandNode(argument);
+  if (!folder || !candidate) {
+    return;
+  }
+  const settings = readSettings(folder);
+  const file = path.join(candidate.dir, settings.inventoryFile);
+  const relative = path.relative(folder.uri.fsPath, file);
+
+  /** @type {fs.Stats | undefined} */
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    stat = undefined;
+  }
+  if (stat && !stat.isFile()) {
+    vscode.window.showErrorMessage(`Playbook Runner: ${relative} exists and is not a file; remove it first.`);
+    return;
+  }
+
+  try {
+    fs.writeFileSync(file, inventory.newInventoryText(), { flag: "wx" });
+  } catch (err) {
+    const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
+    vscode.window.showErrorMessage(
+      code === "EEXIST"
+        ? `Playbook Runner: ${relative} already exists; nothing was written.`
+        : `Playbook Runner: could not create ${relative}: ${messageOf(err)}`,
+    );
+    refresh();
+    return;
+  }
+  refresh();
+  vscode.window.showInformationMessage(`Playbook Runner: created ${relative}; ${candidate.name} is now an environment.`);
+}
+
+/**
+ * Open an environment's inventory in the text editor, at a line.
+ *
+ * @param {unknown} argument
+ * @param {number} line  1-based
+ */
+async function openInventoryCommand(argument, line) {
+  const resolved = await resolveContext(asCommandNode(argument));
+  if (!resolved) {
+    return;
+  }
+  const position = new vscode.Position(Math.max(0, line - 1), 0);
+  await vscode.window.showTextDocument(vscode.Uri.file(resolved.environment.inventory), {
+    viewColumn: vscode.ViewColumn.Beside,
+    selection: new vscode.Range(position, position),
+    preview: true,
+  });
+}
+
+/**
+ * Lines a group plan reports about what it leaves alone.
+ *
+ * @param {string} root
+ * @param {string} group
+ * @param {{ groupVarsFiles: string[], playbooks: string[], manualReferences: number[] }} plan
+ * @param {string} verb  "moved" or "deleted"
+ * @returns {string[]}
+ */
+function untouchedByGroupPlan(root, group, plan, verb) {
+  return [
+    ...plan.groupVarsFiles.map((file) => `${path.relative(root, file)} is not ${verb}; do it by hand.`),
+    plan.playbooks.length ? `Playbooks that name ${group} in hosts: (not changed): ${plan.playbooks.join(", ")}` : "",
+    ...plan.manualReferences.map((line) => `manual block at line ${line} still names ${group}; edit it by hand.`),
+  ];
+}
+
+/**
+ * Rename a server group or service in one environment's inventory, with its
+ * group_vars directory in that environment. Playbooks and other environments
+ * that use the old name are listed, not changed.
+ *
+ * @param {RunTracker} tracker
+ * @param {unknown} argument
+ * @param {string} hash
+ * @param {string} group
+ * @param {() => void} refresh
+ */
+async function renameGroupCommand(tracker, argument, hash, group, refresh) {
+  const resolved = await resolveContext(asCommandNode(argument));
+  if (!resolved) {
+    return;
+  }
+  const { folder, settings, environment } = resolved;
+  const root = folder.uri.fsPath;
+  if (inventoryBlocked(tracker, root, environment, `rename ${group}`)) {
+    return;
+  }
+  const current = readUnchangedInventory(root, environment, hash, refresh);
+  if (current.error !== undefined) {
+    return;
+  }
+  const parsed = inventory.parseInventory(current.text);
+  const taken = [
+    ...parsed.serverGroups.map((item) => item.name),
+    ...parsed.services.map((item) => item.name),
+    ...parsed.manualGroups,
+  ];
+
+  const name = await vscode.window.showInputBox({
+    title: `Rename group ${group} in ${environment.name}`,
+    prompt: "New group name",
+    value: group,
+    valueSelection: [0, group.length],
+    ignoreFocusOut: true,
+    validateInput: (value) => {
+      if (value === group) {
+        return undefined;
+      }
+      const invalid = inventory.validateGroupName(value);
+      if (invalid) {
+        return invalid;
+      }
+      return taken.includes(value) ? `A group named "${value}" already exists.` : undefined;
+    },
+  });
+  if (!name || name === group) {
+    return;
+  }
+
+  /** @type {import("./src/inventory").GroupRenamePlan} */
+  let plan;
+  try {
+    plan = inventory.planGroupRename(root, settings, environment, current.text, group, name);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Playbook Runner: ${messageOf(err)}`);
+    return;
+  }
+
+  const relative = path.relative(root, environment.inventory);
+  const detail = [
+    `${relative}: ${plan.from} → ${plan.to}`,
+    plan.services.length ? `Services listing it are updated: ${plan.services.join(", ")}` : "",
+    plan.groupVarsFrom
+      ? `${path.relative(root, plan.groupVarsFrom)}/ → ${path.relative(root, plan.groupVarsTo)}/`
+      : "",
+    ...untouchedByGroupPlan(root, plan.from, plan, "moved"),
+    plan.otherEnvironments.length
+      ? `Other environments with a group ${plan.from} (not changed): ${plan.otherEnvironments.join(", ")}`
+      : "",
+    plan.warnings.join("\n"),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const answer = await confirmInventoryRewrite({
+    title: `Rename the group ${plan.from} to ${plan.to} in ${environment.name}?`,
+    detail,
+    buttons: ["Rename"],
+    file: environment.inventory,
+    next: plan.text,
+    diffTitle: `${environment.name}: ${relative} ↔ after rename`,
+    modal: "warning",
+  });
+  if (answer !== "Rename") {
+    return;
+  }
+  if (
+    !(await pickers.confirmProduction(settings, environment, `rename of ${plan.from} to ${plan.to}`, {
+      verb: "Save",
+      button: "Rename",
+    }))
+  ) {
+    return;
+  }
+
+  if (readUnchangedInventory(root, environment, hash, refresh).error !== undefined) {
+    return;
+  }
+  try {
+    inventory.applyGroupRename(plan, environment.inventory);
+  } catch (err) {
+    refresh();
+    vscode.window.showErrorMessage(`Playbook Runner: could not rename ${plan.from}: ${messageOf(err)}`);
+    return;
+  }
+  refresh();
+  vscode.window.showInformationMessage(`Playbook Runner: renamed ${plan.from} to ${plan.to} in ${environment.name}.`);
+}
+
+/**
+ * Delete a server group or service from one environment's inventory, and on
+ * request move its group_vars directory to the trash. Asked twice, as for an
+ * environment: a dialog saying what goes, then the name typed out.
+ *
+ * @param {RunTracker} tracker
+ * @param {unknown} argument
+ * @param {string} hash
+ * @param {string} group
+ * @param {() => void} refresh
+ */
+async function deleteGroupCommand(tracker, argument, hash, group, refresh) {
+  const resolved = await resolveContext(asCommandNode(argument));
+  if (!resolved) {
+    return;
+  }
+  const { folder, settings, environment } = resolved;
+  const root = folder.uri.fsPath;
+  if (inventoryBlocked(tracker, root, environment, `delete ${group}`)) {
+    return;
+  }
+  const current = readUnchangedInventory(root, environment, hash, refresh);
+  if (current.error !== undefined) {
+    return;
+  }
+
+  /** @type {import("./src/inventory").GroupDeletePlan} */
+  let plan;
+  try {
+    plan = inventory.planGroupDelete(root, settings, environment, current.text, group);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Playbook Runner: ${messageOf(err)}`);
+    return;
+  }
+
+  const relative = path.relative(root, environment.inventory);
+  const groupVars = plan.groupVars;
+  const groupVarsRelative = groupVars ? `${path.relative(root, groupVars)}/` : "";
+  const trashLabel = `Delete and trash ${path.basename(environment.groupVarsDir)}`;
+  const detail = [
+    `${relative}: the sections of ${plan.name} are removed.`,
+    plan.services.length ? `Removed from the children of: ${plan.services.join(", ")}` : "",
+    plan.emptied.length ? `Left with no children and no hosts: ${plan.emptied.join(", ")}` : "",
+    groupVars ? `${groupVarsRelative} stays unless you choose "${trashLabel}", which moves it to the trash.` : "",
+    ...untouchedByGroupPlan(root, plan.name, plan, "deleted"),
+    plan.warnings.join("\n"),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const answer = await confirmInventoryRewrite({
+    title: `Delete the group ${plan.name} from ${environment.name}?`,
+    detail,
+    buttons: groupVars ? ["Delete", trashLabel] : ["Delete"],
+    file: environment.inventory,
+    next: plan.text,
+    diffTitle: `${environment.name}: ${relative} ↔ after delete`,
+    modal: "warning",
+  });
+  if (answer !== "Delete" && answer !== trashLabel) {
+    return;
+  }
+  if (!(await pickers.confirmByName(plan.name, `Delete group ${plan.name} from ${environment.name}`))) {
+    return;
+  }
+  const trash = answer === trashLabel;
+  if (
+    !(await pickers.confirmProduction(
+      settings,
+      environment,
+      `delete of ${plan.name}${trash ? ` and ${groupVarsRelative}` : ""}`,
+      { verb: "Save", button: "Delete" },
+    ))
+  ) {
+    return;
+  }
+
+  if (readUnchangedInventory(root, environment, hash, refresh).error !== undefined) {
+    return;
+  }
+  try {
+    fs.writeFileSync(environment.inventory, plan.text);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Playbook Runner: could not delete ${plan.name}: ${messageOf(err)}`);
+    return;
+  }
+  if (trash && groupVars) {
+    try {
+      await vscode.workspace.fs.delete(vscode.Uri.file(groupVars), { recursive: true, useTrash: true });
+    } catch (err) {
+      refresh();
+      vscode.window.showWarningMessage(
+        `Playbook Runner: ${relative} was changed, but ${groupVarsRelative} was not moved to the trash: ${messageOf(err)}`,
+      );
+      return;
+    }
+  }
+  refresh();
+  vscode.window.showInformationMessage(
+    `Playbook Runner: deleted ${plan.name} from ${environment.name}${trash ? ` and moved ${groupVarsRelative} to the trash` : ""}.`,
+  );
+}
+
 /**
  * The file watchers that keep the dashboard current.
  *
@@ -1056,6 +1548,11 @@ function activate(context) {
       createEnvironment: (node) => createEnvironmentSkeleton(node, refresh),
       renameEnvironment: (node) => renameEnvironmentCommand(context, tracker, node, refresh),
       deleteEnvironment: (node) => deleteEnvironmentCommand(tracker, node, refresh),
+      saveInventory: (node, edited) => saveInventoryCommand(tracker, node, edited, refresh),
+      createInventory: (node) => createInventoryCommand(node, refresh),
+      openInventory: (node, line) => openInventoryCommand(node, line),
+      renameGroup: (node, hash, group) => renameGroupCommand(tracker, node, hash, group, refresh),
+      deleteGroup: (node, hash, group) => deleteGroupCommand(tracker, node, hash, group, refresh),
       rerunLast: () => rerunLast(context, tracker),
     },
   };
@@ -1088,6 +1585,7 @@ function activate(context) {
     ),
     register("playbookRunner.rerunLast", () => rerunLast(context, tracker)),
     register("playbookRunner.openDashboard", () => DashboardPanel.show(context, dashboardDeps)),
+    vscode.workspace.registerTextDocumentContentProvider(INVENTORY_PREVIEW_SCHEME, inventoryPreviewProvider),
     vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
       deserializeWebviewPanel: async (panel) => DashboardPanel.revive(panel, context, dashboardDeps),
     }),

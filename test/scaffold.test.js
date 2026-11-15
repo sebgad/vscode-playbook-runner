@@ -350,9 +350,9 @@ describe("planWorkspace", () => {
     assert.deepEqual(plan.unknownEnvironments, []);
     assert.equal(plan.limited, false);
     createSkeleton(plan);
-    assert.match(
+    assert.equal(
       fs.readFileSync(path.join(empty, "inventories/dev/hosts.ini"), "utf8"),
-      /^\[web\]\nlocalhost ansible_connection=local /,
+      "[web]\nlocalhost ansible_connection=local\n",
     );
     assert.equal(fs.readFileSync(path.join(empty, "ansible.cfg"), "utf8"), "[defaults]\nroles_path = roles\n");
     assert.deepEqual(findEnvironments(empty, {}).map((e) => e.name), ["dev"]);

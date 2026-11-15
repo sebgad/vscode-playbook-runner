@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+* *Get started* writes `localhost ansible_connection=local` without an
+  `ansible_python_interpreter` line; Ansible finds the interpreter itself.
+* **No vault, no passphrase prompt.** A playbook run against an environment
+  with nothing encrypted no longer asks for a vault password; it used to, on
+  every run, whenever no password file was configured. Vault content outside
+  the environment (in a role) still needs a password file.
+* **Inventory tab**: edit an environment's INI inventory from the dashboard —
+  hosts, their SSH login (`ansible_host`, `ansible_user`, `ansible_port`,
+  `ansible_ssh_private_key_file`, `ansible_ssh_common_args`), other host and
+  group variables, and the groups each service lists as children. Server groups
+  and services can be created, renamed and deleted; a rename or delete carries
+  the group's `group_vars` directory (and the services' children entries)
+  along. *Show diff* reads the change before *Save*, *Rename* or *Delete*.
+  Hovering a field, a known `ansible_*` variable or a section heading explains
+  what it means.
+* Text between the lines `# playbook-runner: manual begin` and
+  `# playbook-runner: manual end` is kept verbatim; other comments, duplicate sections and entries
+  the page cannot read are dropped or merged on save, and the confirmation says
+  so first (for a rename or delete too). Values in `:vars` sections are kept
+  exactly as written, since Ansible evaluates them; a byte order mark and
+  CRLF line endings are kept.
+* A save is refused while the file has unsaved edits in an editor, while a
+  playbook runs against the environment, or when the file changed on disk since
+  the page loaded. Password variables (`ansible_password`, …) are refused: use
+  the group's vault.
+* Only INI inventories are editable; an environment folder without an
+  inventory file offers *Create inventory*.
+* This lifts the rule that an existing inventory is never given hosts (and
+  that only a command-created one gets `localhost`); a new environment
+  modelled on another still gets no copied hosts, and *Create inventory*
+  writes no hosts.
+
 ## 0.6.0
 
 No change to the extension itself: what ships is the same as 0.5.0.

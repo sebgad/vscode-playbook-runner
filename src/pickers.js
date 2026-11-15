@@ -244,14 +244,16 @@ async function pickEnvironmentSource(environments) {
 }
 
 /**
- * The last question before an environment is removed: its name, typed out.
+ * The last question before an environment or an inventory group is removed:
+ * its name, typed out.
  *
  * @param {string} name
+ * @param {string} [title]
  * @returns {Promise<boolean>}
  */
-async function confirmByName(name) {
+async function confirmByName(name, title = `Delete environment ${name}`) {
   const typed = await vscode.window.showInputBox({
-    title: `Delete environment ${name}`,
+    title,
     prompt: `Type ${name} to confirm`,
     ignoreFocusOut: true,
     validateInput: (value) => (value === name ? undefined : `Type ${name} exactly, or press Escape to cancel.`),
@@ -550,20 +552,28 @@ async function pickRunOptions(previous = {}, availableTags = [], outline) {
  *
  * @param {import("./defaults").Settings} settings
  * @param {import("./discovery").Environment} environment
+ * Runs ask "Run <description> against <env>?"; a write to the environment's
+ * files passes `wording`, which asks "<verb> <description> to <env>?" with its
+ * own button instead.
+ *
  * @param {string} description
+ * @param {{ verb: string, button: string }} [wording]
  * @returns {Promise<boolean>}
  */
-async function confirmProduction(settings, environment, description) {
+async function confirmProduction(settings, environment, description, wording) {
   const production = productionPattern(settings);
   if (!settings.confirmProduction || !production || !production.test(environment.name)) {
     return true;
   }
+  const button = wording ? wording.button : "Run";
   const answer = await vscode.window.showWarningMessage(
-    `Run ${description} against ${environment.name}?`,
+    wording
+      ? `${wording.verb} ${description} to ${environment.name}?`
+      : `Run ${description} against ${environment.name}?`,
     { modal: true, detail: "This targets the production inventory." },
-    "Run",
+    button,
   );
-  return answer === "Run";
+  return answer === button;
 }
 
 /**

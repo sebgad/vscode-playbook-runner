@@ -511,6 +511,39 @@ tree without a reload.
     that method but changes how it behaves is trusted untested; the range
     banner and the status-file verdict for an edge that never matched remain
     the signals. `test/range-plugin.test.js` was run against 2.21 and 2.22.
+25. ✅ an Inventory tab in the dashboard: `src/inventory.js`, which never
+    imports `vscode`, parses an INI inventory into hosts, server groups and
+    services (groups with a `:children` section) and writes it back
+    (`parseInventory`, `serializeInventory`, `validateInventory`); the
+    dashboard's save action in `extension.js`
+    refuses while an editor has unsaved edits, a playbook runs against the
+    environment, or the file changed since the page loaded (`inventoryHash`).
+    This drops step 21's rule that an existing inventory is never given hosts
+    and step 23's narrowing of it (only `localhost`, only into an inventory the
+    command creates itself): the extension now writes hosts the user typed into
+    an existing inventory. *Create inventory* still writes only the marker
+    skeleton, no hosts. Step 21's rule for a *new environment modelled on another* --
+    no copied hosts -- still holds. Group rename and delete cover server
+    groups and services and carry `group_vars/<name>/` and the children entries
+    along; file-form group vars and manual blocks naming the group are only
+    reported. Passwords are refused (the vault is for them). **The accepted
+    cost:** a write is a rewrite, so comments outside `# playbook-runner:
+    manual begin` / `manual end` blocks are dropped on the first save, as are
+    duplicate sections and entries (merged); every such loss is listed in a
+    warning and the diff can be read before saving. A file the parser cannot
+    place safely (unbalanced markers, a manual block opening a section without
+    a following header) stays read-only in the tab.
+26. ✅ a playbook run asks for the vault passphrase only when the environment
+    has something encrypted. Step 5's fallback passed `--ask-vault-password`
+    whenever no password file resolved, and ansible prompts on that flag even
+    when nothing needs decrypting -- so an environment without a vault asked
+    for a passphrase on every run. `discovery.environmentUsesVault` now looks
+    for `$ANSIBLE_VAULT;` (a vault file or an inline `!vault` value) in any
+    file under the environment's directory; without one the flag is left out.
+    A resolved password file is still passed, since it never prompts. **The
+    accepted cost:** vault content outside the environment -- in a role or a
+    playbook's own vars -- is not seen; such a run fails with "no vault
+    secrets found" unless a password file is configured.
 
 ## 10. Verification
 
