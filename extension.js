@@ -430,10 +430,15 @@ async function createServiceSkeleton(argument, refresh) {
     return;
   }
 
+  const start = await pickers.pickServiceStart();
+  if (!start) {
+    return;
+  }
+
   /** @type {import("./src/scaffold").SkeletonPlan} */
   let plan;
   try {
-    plan = scaffold.planService(root, name, settings);
+    plan = scaffold.planService(root, name, settings, { starter: start.starter });
   } catch (err) {
     vscode.window.showErrorMessage(`Playbook Runner: ${messageOf(err)}`);
     return;
@@ -465,6 +470,14 @@ async function createServiceSkeleton(argument, refresh) {
   } else if (plan.limited) {
     notes.push(`Environments limited by playbookRunner.serviceEnvironments: ${plan.environments.join(", ")}.`);
   }
+  if (start.starter) {
+    const hostless = environmentsWithoutGroup(root, settings, plan.name);
+    if (hostless.length) {
+      notes.push(
+        `${plan.name}.yml runs on the ${plan.name} group, which has no hosts in ${hostless.join(", ")} yet.`,
+      );
+    }
+  }
   const note = notes.map((line) => `\n\n${line}`).join("");
   const answer = await vscode.window.showInformationMessage(
     `Create the skeleton for ${plan.name}?`,
@@ -481,10 +494,129 @@ async function createServiceSkeleton(argument, refresh) {
     vscode.window.showInformationMessage(
       `Playbook Runner: created ${created.length} ${created.length === 1 ? "entry" : "entries"} for ${plan.name}.`,
     );
+    await openStarter(plan, created);
   } catch (err) {
     vscode.window.showErrorMessage(
       `Playbook Runner: could not create the skeleton for ${plan.name}: ${messageOf(err)}`,
     );
+  }
+}
+
+/**
+ * The environments whose inventory has no hosts under `group`. YAML
+ * inventories and unreadable files are skipped: the check is a line scan of
+ * an INI file and says nothing about them.
+ *
+ * @param {string} root
+ * @param {import("./src/defaults").Settings} settings
+ * @param {string} group
+ * @returns {string[]}
+ */
+function environmentsWithoutGroup(root, settings, group) {
+  /** @type {string[]} */
+  const names = [];
+  for (const environment of findEnvironments(root, settings)) {
+    if (/\.ya?ml$/i.test(environment.inventory)) {
+      continue;
+    }
+    let text;
+    try {
+      text = fs.readFileSync(environment.inventory, "utf8");
+    } catch {
+      continue;
+    }
+    if (!scaffold.groupHasHosts(text, group)) {
+      names.push(environment.name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Open the starter playbook of a plan, when this run created it.
+ *
+ * @param {import("./src/scaffold").SkeletonPlan} plan
+ * @param {import("./src/scaffold").SkeletonEntry[]} created
+ */
+async function openStarter(plan, created) {
+  const starter = created.find((entry) => entry.type === "file" && path.basename(entry.path) === `${plan.name}.yml`);
+  if (starter) {
+    await vscode.window.showTextDocument(vscode.Uri.file(starter.path));
+  }
+}
+
+/**
+ * Set up an empty workspace folder for Ansible: a first environment whose
+ * inventory puts localhost in the service's group, an empty roles directory
+ * and one service with a starter playbook -- so there is something to press
+ * play on. Refused when the folder already has environments.
+ *
+ * @param {unknown} argument
+ * @param {() => void} refresh
+ */
+async function getStarted(argument, refresh) {
+  const node = asCommandNode(argument);
+  const folder = node.folder || (await pickers.pickFolder());
+  if (!folder) {
+    return;
+  }
+  const settings = readSettings(folder);
+  const root = folder.uri.fsPath;
+
+  if (findEnvironments(root, settings).length) {
+    vscode.window.showInformationMessage(
+      `Playbook Runner: ${folder.name} already has environments \u2014 use New service\u2026 or New environment\u2026`,
+    );
+    return;
+  }
+
+  const environment = await pickers.pickEnvironmentName({
+    title: "Get started: first environment",
+    prompt: `Directory name under ${settings.inventoriesDir}/`,
+    taken: [],
+  });
+  if (!environment) {
+    return;
+  }
+  const service = await pickers.pickServiceName(scaffold.existingServiceNames(root, settings));
+  if (!service) {
+    return;
+  }
+
+  /** @type {import("./src/scaffold").SkeletonPlan} */
+  let plan;
+  try {
+    plan = scaffold.planWorkspace(root, { environment, service }, settings);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Playbook Runner: ${messageOf(err)}`);
+    return;
+  }
+
+  const missing = plan.entries.filter((entry) => !entry.exists);
+  const detail = missing
+    .map((entry) => (entry.type === "directory" ? `${entry.relative}/` : entry.relative))
+    .join("\n");
+  const answer = await vscode.window.showInformationMessage(
+    `Set up ${folder.name} for Ansible?`,
+    {
+      modal: true,
+      detail: `${detail}\n\nThe inventory puts localhost in the ${service} group, so \u25b6 on ${service}.yml runs on this machine.`,
+    },
+    "Create",
+  );
+  if (answer !== "Create") {
+    return;
+  }
+
+  try {
+    const { created } = scaffold.createSkeleton(plan);
+    refresh();
+    vscode.window.showInformationMessage(
+      `Playbook Runner: created ${created.length} ${created.length === 1 ? "entry" : "entries"} in ${folder.name}.`,
+    );
+    await openStarter(plan, created);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Playbook Runner: could not set up ${folder.name}: ${messageOf(err)}`);
   }
 }
 
@@ -897,6 +1029,7 @@ function activate(context) {
       vault: (node, action) => vaultCommand(node, action),
       rekey: (node) => rekeyVaultsCommand(node),
       createService: (node) => createServiceSkeleton(node, refresh),
+      getStarted: (node) => getStarted(node, refresh),
       createEnvironment: (node) => createEnvironmentSkeleton(node, refresh),
       renameEnvironment: (node) => renameEnvironmentCommand(context, tracker, node, refresh),
       deleteEnvironment: (node) => deleteEnvironmentCommand(tracker, node, refresh),
@@ -939,6 +1072,7 @@ function activate(context) {
     register("playbookRunner.createVault", (node) => vaultCommand(node, "create")),
     register("playbookRunner.rekeyVaults", (node) => rekeyVaultsCommand(node)),
     register("playbookRunner.createService", (node) => createServiceSkeleton(node, refresh)),
+    register("playbookRunner.getStarted", (node) => getStarted(node, refresh)),
     register("playbookRunner.createEnvironment", (node) => createEnvironmentSkeleton(node, refresh)),
     register("playbookRunner.renameEnvironment", (node) =>
       renameEnvironmentCommand(context, tracker, node, refresh),

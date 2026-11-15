@@ -107,6 +107,12 @@
         "icon": "$(new-folder)"
       },
       {
+        "command": "playbookRunner.getStarted",
+        "title": "Get Started…",
+        "category": "Playbook Runner",
+        "icon": "$(rocket)"
+      },
+      {
         "command": "playbookRunner.createEnvironment",
         "title": "Create Environment Skeleton…",
         "category": "Playbook Runner",

@@ -1474,8 +1474,14 @@
             { class: "runbar-line" },
             h(
               "button",
+              { class: "run", onclick: () => vscode.postMessage({ type: "getStarted", folder: folder.path }) },
+              icon("rocket"),
+              "Get started…",
+            ),
+            h(
+              "button",
               {
-                class: "run",
+                class: "icon-button",
                 onclick: () => {
                   state.tab = "settings";
                   changed();

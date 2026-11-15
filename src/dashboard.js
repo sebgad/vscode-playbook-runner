@@ -97,6 +97,7 @@ function settingViews(context) {
  * @property {(node: object, action: "edit" | "create") => Promise<void>} vault
  * @property {(node: object) => Promise<void>} rekey
  * @property {(node: object) => Promise<void>} createService
+ * @property {(node: object) => Promise<void>} getStarted
  * @property {(node: object) => Promise<void>} createEnvironment
  * @property {(node: object) => Promise<void>} renameEnvironment
  * @property {(node: object) => Promise<void>} deleteEnvironment
@@ -322,6 +323,14 @@ class DashboardPanel {
       const workspaceFolder = folder && workspaceFolderAt(folder.path);
       if (workspaceFolder) {
         await this.deps.actions.createService({ folder: workspaceFolder });
+      }
+      return;
+    }
+    if (message.type === "getStarted") {
+      const folder = model.resolveFolderRequest(this.model, message.folder);
+      const workspaceFolder = folder && workspaceFolderAt(folder.path);
+      if (workspaceFolder) {
+        await this.deps.actions.getStarted({ folder: workspaceFolder });
       }
       return;
     }

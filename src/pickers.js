@@ -164,6 +164,27 @@ async function pickServiceName(existingNames) {
 }
 
 /**
+ * What a new service starts with: an empty folder, or a playbook that pings
+ * the service's group.
+ *
+ * @returns {Promise<{ starter: boolean } | undefined>} undefined when dismissed
+ */
+async function pickServiceStart() {
+  const picked = await vscode.window.showQuickPick(
+    [
+      { label: "$(folder) Empty folder", starter: false },
+      {
+        label: "$(file-code) With a starter playbook",
+        description: "<name>.yml: a ping on the service's group",
+        starter: true,
+      },
+    ],
+    { title: "New service: start with", ignoreFocusOut: true },
+  );
+  return picked && { starter: picked.starter };
+}
+
+/**
  * The name of a new environment, or the new name of an existing one. A name
  * that is taken is refused: neither a skeleton nor a rename may land on an
  * environment that is already there.
@@ -592,6 +613,7 @@ module.exports = {
   pickPlaybook,
   pickRunOptions,
   pickServiceName,
+  pickServiceStart,
   pickTags,
   pickTask,
   pickVaultGroup,
