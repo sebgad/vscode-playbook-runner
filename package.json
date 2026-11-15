@@ -2,7 +2,7 @@
   "name": "playbook-runner",
   "displayName": "Playbook Runner",
   "description": "Run Ansible playbooks and manage vaults from a dashboard, discovered from the filesystem.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "sebgad",
   "license": "MIT",
   "preview": true,

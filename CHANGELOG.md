@@ -1,13 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
-* *Get started* writes `localhost ansible_connection=local` without an
-  `ansible_python_interpreter` line; Ansible finds the interpreter itself.
-* **No vault, no passphrase prompt.** A playbook run against an environment
-  with nothing encrypted no longer asks for a vault password; it used to, on
-  every run, whenever no password file was configured. Vault content outside
-  the environment (in a role) still needs a password file.
+### Inventory tab
+
 * **Inventory tab**: edit an environment's INI inventory from the dashboard —
   hosts, their SSH login (`ansible_host`, `ansible_user`, `ansible_port`,
   `ansible_ssh_private_key_file`, `ansible_ssh_common_args`), other host and
@@ -33,6 +29,15 @@
   that only a command-created one gets `localhost`); a new environment
   modelled on another still gets no copied hosts, and *Create inventory*
   writes no hosts.
+
+### Runs and Get started
+
+* **No vault, no passphrase prompt.** A playbook run against an environment
+  with nothing encrypted no longer asks for a vault password; it used to, on
+  every run, whenever no password file was configured. Vault content outside
+  the environment (in a role) still needs a password file.
+* *Get started* writes `localhost ansible_connection=local` without an
+  `ansible_python_interpreter` line; Ansible finds the interpreter itself.
 
 ## 0.6.0
 
