@@ -903,6 +903,7 @@ function playbooksNamingGroup(root, settings, group) {
  * @property {string[]} playbooks Playbooks naming the group (they are not edited).
  * @property {string[]} otherEnvironments Other environments that have a group of that name.
  * @property {number[]} manualReferences Lines of manual blocks that mention the group; left untouched.
+ * @property {string[]} warnings What the rewrite of the file drops or merges (parseInventory's warnings).
  */
 
 /**
@@ -916,6 +917,7 @@ function playbooksNamingGroup(root, settings, group) {
  * @property {string[]} emptied Those services that end up with no children and no hosts.
  * @property {string[]} playbooks Playbooks naming the group.
  * @property {number[]} manualReferences Lines of manual blocks that mention the group; left untouched.
+ * @property {string[]} warnings What the rewrite of the file drops or merges (parseInventory's warnings).
  */
 
 const GROUP_VARS_FILE_EXTENSIONS = [".yml", ".yaml", ".json"];
@@ -949,6 +951,31 @@ function manualReferencesTo(inventory, name) {
 }
 
 /**
+ * The begin line of the first manual block that lists `name` as a member of a
+ * `[x:children]` section; null when none does. Renaming or deleting the group
+ * would leave Ansible a child it cannot find.
+ *
+ * @param {Inventory} inventory
+ * @param {string} name
+ * @returns {number | null}
+ */
+function manualChildReference(inventory, name) {
+  for (const block of inventory.manual) {
+    let inChildren = false;
+    for (const line of block.text.split(/\r?\n/)) {
+      const { text } = stripComment(line);
+      const header = /^\[([^\]]+)\]$/.exec(text);
+      if (header) {
+        inChildren = (header[1] ?? "").endsWith(":children");
+      } else if (inChildren && tokenize(text)[0] === name) {
+        return block.line;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * @param {string} diskText
  * @param {string} name
  * @param {string} verb
@@ -968,6 +995,12 @@ function parseForGroupChange(diskText, name, verb) {
   }
   if (group.readOnly) {
     throw new Error(`"${name}" cannot be edited here; edit the inventory text to ${verb} it.`);
+  }
+  const child = manualChildReference(inventory, name);
+  if (child !== null) {
+    throw new Error(
+      `A manual block lists "${name}" as a child, which Ansible would refuse once it is gone; edit the manual block at line ${child} first.`,
+    );
   }
   return inventory;
 }
@@ -1051,6 +1084,7 @@ function planGroupRename(root, settings, environment, diskText, from, to) {
     playbooks: playbooksNamingGroup(root, settings, from),
     otherEnvironments,
     manualReferences: manualReferencesTo(inventory, from),
+    warnings: inventory.warnings,
   };
 }
 
@@ -1096,31 +1130,48 @@ function planGroupDelete(root, settings, environment, diskText, name) {
     emptied,
     playbooks: playbooksNamingGroup(root, settings, name),
     manualReferences: manualReferencesTo(inventory, name),
+    warnings: inventory.warnings,
   };
 }
 
 /**
- * Write the new inventory, then move the group_vars directory. The target is
- * re-checked first (it may have appeared since planning), and the text goes
- * before the move: a failed write then changes nothing at all.
+ * Move the group's vars directory, then write the new inventory. The target
+ * is re-checked first (it may have appeared since planning). A failed move
+ * changes nothing; a failed write moves the directory back, so a vault is
+ * never left under a name the inventory does not have.
  *
  * @param {GroupRenamePlan} plan
  * @param {string} inventoryPath
  */
 function applyGroupRename(plan, inventoryPath) {
-  if (plan.groupVarsFrom && fs.existsSync(plan.groupVarsTo)) {
+  /** @param {unknown} error */
+  const reasonOf = (error) => (error instanceof Error ? error.message : String(error));
+  const from = plan.groupVarsFrom;
+  const dirName = path.basename(path.dirname(plan.groupVarsTo));
+  if (from && fs.existsSync(plan.groupVarsTo)) {
     throw new Error(`${plan.groupVarsTo} now exists; nothing was changed.`);
   }
-  fs.writeFileSync(inventoryPath, plan.text);
-  if (plan.groupVarsFrom) {
+  if (from) {
     try {
-      fs.renameSync(plan.groupVarsFrom, plan.groupVarsTo);
+      fs.renameSync(from, plan.groupVarsTo);
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`The ${dirName} directory could not be moved (${from} to ${plan.groupVarsTo}), so nothing was changed: ${reasonOf(error)}`);
+    }
+  }
+  try {
+    fs.writeFileSync(inventoryPath, plan.text);
+  } catch (error) {
+    if (!from) {
+      throw error;
+    }
+    try {
+      fs.renameSync(plan.groupVarsTo, from);
+    } catch (back) {
       throw new Error(
-        `The inventory was already changed, but the group_vars directory was not moved (${plan.groupVarsFrom} to ${plan.groupVarsTo}): ${reason}`,
+        `The inventory could not be written (${reasonOf(error)}), and the ${dirName} directory could not be moved back from ${plan.groupVarsTo} to ${from}: ${reasonOf(back)}`,
       );
     }
+    throw new Error(`The inventory could not be written, so the ${dirName} directory was moved back: ${reasonOf(error)}`);
   }
 }
 

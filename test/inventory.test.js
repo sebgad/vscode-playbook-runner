@@ -657,7 +657,7 @@ describe("group rename and delete plans", () => {
   });
 
   describe("fix round 1", () => {
-    const WITH_MANUAL = `${HOSTS}\n${MANUAL_BEGIN}\n[hand:children]\npodman_servers\n# podman_servers in a comment\n${MANUAL_END}\n`;
+    const WITH_MANUAL = `${HOSTS}\n${MANUAL_BEGIN}\n[hand]\nbox other=a,podman_servers\n# podman_servers in a comment\n${MANUAL_END}\n`;
 
     it("renames and deletes a service", () => {
       const { root, environment } = setup(HOSTS, ["inventories/production/group_vars/immich/env.yml"]);
@@ -685,7 +685,7 @@ describe("group rename and delete plans", () => {
       try {
         const plan = planGroupRename(root, DEFAULTS, environment, WITH_MANUAL, "podman_servers", "podman");
         assert.equal(plan.manualReferences.length, 1);
-        assert.ok(plan.text.includes("[hand:children]\npodman_servers\n"));
+        assert.ok(plan.text.includes("[hand]\nbox other=a,podman_servers\n"));
         const del = planGroupDelete(root, DEFAULTS, environment, WITH_MANUAL, "podman_servers");
         assert.equal(del.manualReferences.length, 1);
         const anchored = `[podman_servers]\nbox\n\n${MANUAL_BEGIN}\n# x\n${MANUAL_END}\n\n[nfs_servers]\nnfs\n`;
@@ -719,6 +719,69 @@ describe("group rename and delete plans", () => {
         const plan = planGroupRename(root, DEFAULTS, environment, HOSTS, "podman_servers", "podman");
         fs.mkdirSync(plan.groupVarsTo, { recursive: true });
         assert.throws(() => applyGroupRename(plan, environment.inventory));
+        assert.equal(fs.readFileSync(environment.inventory, "utf8"), HOSTS);
+      } finally {
+        removeFixture(root);
+      }
+    });
+
+    it("refuses while a manual block lists the group as a child", () => {
+      const text = `${HOSTS}\n${MANUAL_BEGIN}\n[hand:children]\npodman_servers\n${MANUAL_END}\n`;
+      const line = text.split("\n").indexOf(MANUAL_BEGIN) + 1;
+      const { root, environment } = setup(text);
+      try {
+        const expected = new RegExp(`manual block at line ${line} first`);
+        assert.throws(() => planGroupRename(root, DEFAULTS, environment, text, "podman_servers", "podman"), expected);
+        assert.throws(() => planGroupDelete(root, DEFAULTS, environment, text, "podman_servers"), expected);
+        // Another group is unaffected.
+        assert.doesNotThrow(() => planGroupDelete(root, DEFAULTS, environment, text, "nfs_servers"));
+      } finally {
+        removeFixture(root);
+      }
+    });
+
+    it("plans carry the warnings of the rewrite", () => {
+      const text = `# a comment\n${HOSTS}[immich:children]\nnfs_servers\n`;
+      const { root, environment } = setup(text);
+      try {
+        const expected = [
+          "1 comment line(s) outside manual blocks will be removed",
+          "1 duplicate section(s) will be merged",
+        ];
+        assert.deepEqual(planGroupRename(root, DEFAULTS, environment, text, "nfs_servers", "nfs").warnings, expected);
+        assert.deepEqual(planGroupDelete(root, DEFAULTS, environment, text, "nfs_servers").warnings, expected);
+        assert.deepEqual(planGroupDelete(root, DEFAULTS, environment, HOSTS, "nfs_servers").warnings, []);
+      } finally {
+        removeFixture(root);
+      }
+    });
+
+    it("apply moves the vars directory first and moves it back when the write fails", () => {
+      const { root, environment } = setup(HOSTS);
+      try {
+        const plan = planGroupRename(root, DEFAULTS, environment, HOSTS, "podman_servers", "podman");
+        const blocked = path.join(root, "not-a-file");
+        fs.mkdirSync(blocked);
+        assert.throws(() => applyGroupRename(plan, blocked), (error) => {
+          assert.ok(error instanceof Error);
+          assert.match(error.message, /could not be written, so the group_vars directory was moved back/);
+          return true;
+        });
+        assert.ok(fs.existsSync(path.join(environment.groupVarsDir, "podman_servers", "env.yml")));
+        assert.ok(!fs.existsSync(path.join(environment.groupVarsDir, "podman")));
+        assert.equal(fs.readFileSync(environment.inventory, "utf8"), HOSTS);
+      } finally {
+        removeFixture(root);
+      }
+    });
+
+    it("apply names the vars directory by its configured name when the move fails", () => {
+      const { root, environment } = setup(HOSTS);
+      try {
+        const plan = planGroupRename(root, DEFAULTS, environment, HOSTS, "podman_servers", "podman");
+        // The source vanishes after planning, so the move fails and nothing is written.
+        fs.rmSync(path.join(environment.groupVarsDir, "podman_servers"), { recursive: true });
+        assert.throws(() => applyGroupRename(plan, environment.inventory), /nothing was changed/);
         assert.equal(fs.readFileSync(environment.inventory, "utf8"), HOSTS);
       } finally {
         removeFixture(root);

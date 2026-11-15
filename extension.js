@@ -940,6 +940,36 @@ const inventoryPreviewProvider = {
 };
 
 /**
+ * A modal question about rewriting an inventory, with "Show diff" next to
+ * `buttons`. Show diff opens the file against `next` and asks again, not
+ * modal so the diff can be read; dismissing that one cancels.
+ *
+ * @param {{ title: string, detail: string, buttons: string[], file: string, next: string, diffTitle: string, modal?: "information" | "warning" }} spec
+ * @returns {Promise<string | undefined>} the button chosen, or undefined
+ */
+async function confirmInventoryRewrite(spec) {
+  const show = spec.modal === "warning" ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
+  const previewPath = `/${crypto.randomUUID()}/${path.basename(spec.file)}`;
+  inventoryPreviews.set(previewPath, spec.next);
+  try {
+    /** @type {string | undefined} */
+    let answer = await show(spec.title, { modal: true, detail: spec.detail }, ...spec.buttons, "Show diff");
+    if (answer === "Show diff") {
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        vscode.Uri.file(spec.file),
+        vscode.Uri.from({ scheme: INVENTORY_PREVIEW_SCHEME, path: previewPath }),
+        spec.diffTitle,
+      );
+      answer = await show(spec.title, ...spec.buttons, "Cancel");
+    }
+    return answer !== undefined && spec.buttons.includes(answer) ? answer : undefined;
+  } finally {
+    inventoryPreviews.delete(previewPath);
+  }
+}
+
+/**
  * Why an inventory cannot be changed from the dashboard right now, or null.
  * Shown as a warning; the caller stops.
  *
@@ -1056,27 +1086,16 @@ async function saveInventoryCommand(tracker, argument, edited, refresh) {
     ...(disk.warnings.length ? [disk.warnings.join("\n")] : []),
   ].join("\n\n");
 
-  const previewPath = `/${crypto.randomUUID()}/${path.basename(file)}`;
-  inventoryPreviews.set(previewPath, next);
-  try {
-    const title = `Save ${relative} for ${environment.name}?`;
-    /** @type {string | undefined} */
-    let answer = await vscode.window.showInformationMessage(title, { modal: true, detail }, "Save", "Show diff");
-    if (answer === "Show diff") {
-      await vscode.commands.executeCommand(
-        "vscode.diff",
-        vscode.Uri.file(file),
-        vscode.Uri.from({ scheme: INVENTORY_PREVIEW_SCHEME, path: previewPath }),
-        `${environment.name}: ${relative} ↔ after save`,
-      );
-      // Not modal, so the diff can be read while it waits; dismissing it cancels.
-      answer = await vscode.window.showInformationMessage(title, "Save", "Cancel");
-    }
-    if (answer !== "Save") {
-      return undefined;
-    }
-  } finally {
-    inventoryPreviews.delete(previewPath);
+  const answer = await confirmInventoryRewrite({
+    title: `Save ${relative} for ${environment.name}?`,
+    detail,
+    buttons: ["Save"],
+    file,
+    next,
+    diffTitle: `${environment.name}: ${relative} ↔ after save`,
+  });
+  if (answer !== "Save") {
+    return undefined;
   }
 
   const count = changes.length;
@@ -1253,14 +1272,19 @@ async function renameGroupCommand(tracker, argument, hash, group, refresh) {
     plan.otherEnvironments.length
       ? `Other environments with a group ${plan.from} (not changed): ${plan.otherEnvironments.join(", ")}`
       : "",
+    plan.warnings.join("\n"),
   ]
     .filter(Boolean)
     .join("\n\n");
-  const answer = await vscode.window.showWarningMessage(
-    `Rename the group ${plan.from} to ${plan.to} in ${environment.name}?`,
-    { modal: true, detail },
-    "Rename",
-  );
+  const answer = await confirmInventoryRewrite({
+    title: `Rename the group ${plan.from} to ${plan.to} in ${environment.name}?`,
+    detail,
+    buttons: ["Rename"],
+    file: environment.inventory,
+    next: plan.text,
+    diffTitle: `${environment.name}: ${relative} ↔ after rename`,
+    modal: "warning",
+  });
   if (answer !== "Rename") {
     return;
   }
@@ -1332,15 +1356,19 @@ async function deleteGroupCommand(tracker, argument, hash, group, refresh) {
     plan.emptied.length ? `Left with no children and no hosts: ${plan.emptied.join(", ")}` : "",
     groupVars ? `${groupVarsRelative} stays unless you choose "${trashLabel}", which moves it to the trash.` : "",
     ...untouchedByGroupPlan(root, plan.name, plan, "deleted"),
+    plan.warnings.join("\n"),
   ]
     .filter(Boolean)
     .join("\n\n");
-  const buttons = groupVars ? ["Delete", trashLabel] : ["Delete"];
-  const answer = await vscode.window.showWarningMessage(
-    `Delete the group ${plan.name} from ${environment.name}?`,
-    { modal: true, detail },
-    ...buttons,
-  );
+  const answer = await confirmInventoryRewrite({
+    title: `Delete the group ${plan.name} from ${environment.name}?`,
+    detail,
+    buttons: groupVars ? ["Delete", trashLabel] : ["Delete"],
+    file: environment.inventory,
+    next: plan.text,
+    diffTitle: `${environment.name}: ${relative} ↔ after delete`,
+    modal: "warning",
+  });
   if (answer !== "Delete" && answer !== trashLabel) {
     return;
   }
