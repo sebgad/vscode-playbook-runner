@@ -150,8 +150,8 @@ function selectEnvironments(environments, wanted) {
  */
 function starterPlaybook(service) {
   return [
-    `- name: ${service}`,
-    `  hosts: ${service}`,
+    `- name: ${JSON.stringify(service)}`,
+    `  hosts: ${JSON.stringify(service)}`,
     "  gather_facts: false",
     "  tasks:",
     "    - name: Check the connection",
@@ -159,6 +159,16 @@ function starterPlaybook(service) {
     "      tags: [hello]",
     "",
   ].join("\n");
+}
+
+/**
+ * Whether an inventory file is YAML (by extension) rather than INI.
+ *
+ * @param {string} file a file name or path
+ * @returns {boolean}
+ */
+function isYamlInventory(file) {
+  return [".yml", ".yaml"].includes(path.extname(file).toLowerCase());
 }
 
 /**
@@ -174,7 +184,7 @@ function groupHasHosts(inventoryText, group) {
   let inside = false;
   for (const raw of inventoryText.split(/\r?\n/)) {
     const line = raw.trim();
-    const header = /^\[([^\]]+)\]$/.exec(line);
+    const header = /^\[([^\]]+)\]\s*(?:[#;].*)?$/.exec(line);
     if (header) {
       const section = header[1] || "";
       inside = section === group || section === `${group}:children`;
@@ -299,9 +309,8 @@ function planWorkspace(root, names, settings) {
 
   const inventoryDir = path.join(root, config.inventoriesDir, environment);
   add("directory", inventoryDir);
-  const yaml = [".yml", ".yaml"].includes(path.extname(config.inventoryFile).toLowerCase());
-  const local = yaml
-    ? `all:\n  children:\n    ${service}:\n      hosts:\n        localhost:\n          ansible_connection: local\n          ansible_python_interpreter: "{{ ansible_playbook_python }}"\n`
+  const local = isYamlInventory(config.inventoryFile)
+    ? `all:\n  children:\n    ${JSON.stringify(service)}:\n      hosts:\n        localhost:\n          ansible_connection: local\n          ansible_python_interpreter: "{{ ansible_playbook_python }}"\n`
     : `[${service}]\nlocalhost ansible_connection=local ansible_python_interpreter="{{ ansible_playbook_python }}"\n`;
   add("file", path.join(inventoryDir, config.inventoryFile), local);
 
@@ -373,6 +382,7 @@ module.exports = {
   createSkeleton,
   existingServiceNames,
   groupHasHosts,
+  isYamlInventory,
   planService,
   planWorkspace,
   selectEnvironments,

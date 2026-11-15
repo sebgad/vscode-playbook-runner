@@ -242,7 +242,7 @@ inventories/staging/group_vars/<name>/env.yml      ← empty
   `hosts.ini` behind it is skipped and named in the confirmation — the command
   never creates an inventory, because a directory without one is not an
   environment and its group_vars would never show up in the dashboard.
-* **Structure only.** The env files are created empty, and an env file that
+* **Structure only, unless you pick the starter playbook.** The env files are created empty, and an env file that
   already exists is never touched — it is opened with `wx`, not truncated.
 * **Starter playbook** (*With a starter playbook*) also writes
   `playbooks/<name>/<name>.yml`: `hosts: <name>`, one `ansible.builtin.ping`

@@ -17,6 +17,7 @@ const {
   createSkeleton,
   existingServiceNames,
   groupHasHosts,
+  isYamlInventory,
   planService,
   planWorkspace,
   selectEnvironments,
@@ -272,8 +273,15 @@ describe("starter playbook", () => {
   it("is a ping on the service's group", () => {
     assert.equal(
       starterPlaybook("web"),
-      "- name: web\n  hosts: web\n  gather_facts: false\n  tasks:\n    - name: Check the connection\n      ansible.builtin.ping:\n      tags: [hello]\n",
+      "- name: \"web\"\n  hosts: \"web\"\n  gather_facts: false\n  tasks:\n    - name: Check the connection\n      ansible.builtin.ping:\n      tags: [hello]\n",
     );
+  });
+
+  it("quotes a name YAML would read as a non-string", () => {
+    for (const name of ["true", "123", "1.0", "null", "yes"]) {
+      const text = starterPlaybook(name);
+      assert.ok(text.startsWith(`- name: "${name}"\n  hosts: "${name}"\n`), name);
+    }
   });
 
   it("planService adds it only when asked", () => {
@@ -298,6 +306,15 @@ describe("groupHasHosts", () => {
     assert.equal(groupHasHosts("[web]\n# none\n; none\n\n[db]\nh\n", "web"), false));
   it("does not count :vars", () => assert.equal(groupHasHosts("[web:vars]\nx=1\n", "web"), false));
   it("counts :children", () => assert.equal(groupHasHosts("[web:children]\nfront\n", "web"), true));
+  it("accepts a trailing comment on the header", () => {
+    assert.equal(groupHasHosts("[web] # frontends\nhost1\n", "web"), true);
+    assert.equal(groupHasHosts("[web:children] ; x\nfront\n", "web"), true);
+    assert.equal(groupHasHosts("[web] # frontends\n# none\n", "web"), false);
+  });
+  it("reads CRLF input", () => {
+    assert.equal(groupHasHosts("[web]\r\nhost1\r\n", "web"), true);
+    assert.equal(groupHasHosts("[web]\r\n# none\r\n[db]\r\nh\r\n", "web"), false);
+  });
   it("missing group", () => assert.equal(groupHasHosts("[db]\nh\n", "web"), false));
 });
 
@@ -361,7 +378,20 @@ describe("planWorkspace", () => {
   it("writes a yaml inventory for a yaml inventory file", () => {
     const plan = planWorkspace(empty, { environment: "dev", service: "web" }, { inventoryFile: "hosts.yml" });
     const file = entry(plan, "inventories/dev/hosts.yml");
-    assert.ok((file.content || "").startsWith("all:\n  children:\n    web:"));
+    assert.ok((file.content || "").startsWith("all:\n  children:\n    \"web\":"));
+  });
+
+  it("quotes the service in a yaml inventory", () => {
+    for (const service of ["true", "123"]) {
+      const plan = planWorkspace(empty, { environment: "dev", service }, { inventoryFile: "hosts.yml" });
+      assert.ok((entry(plan, "inventories/dev/hosts.yml").content || "").includes(`    "${service}":\n`), service);
+      assert.ok((entry(plan, `playbooks/${service}/${service}.yml`).content || "").includes(`hosts: "${service}"`));
+    }
+  });
+
+  it("leaves the service unquoted in an ini inventory", () => {
+    const plan = planWorkspace(empty, { environment: "dev", service: "true" });
+    assert.ok((entry(plan, "inventories/dev/hosts.ini").content || "").startsWith("[true]\n"));
   });
 
   it("uses the configured directories", () => {
@@ -387,5 +417,18 @@ describe("planWorkspace", () => {
   it("refuses bad names", () => {
     assert.throws(() => planWorkspace(empty, { environment: "a/b", service: "web" }));
     assert.throws(() => planWorkspace(empty, { environment: "dev", service: "" }));
+  });
+});
+
+describe("isYamlInventory", () => {
+  it("is true for .yml and .yaml in any case", () => {
+    for (const f of ["hosts.yml", "hosts.yaml", "/a/b/HOSTS.YML", "x.Yaml"]) {
+      assert.equal(isYamlInventory(f), true, f);
+    }
+  });
+  it("is false for anything else", () => {
+    for (const f of ["hosts.ini", "hosts", "yml", "hosts.yml.bak"]) {
+      assert.equal(isYamlInventory(f), false, f);
+    }
   });
 });

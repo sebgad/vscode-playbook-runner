@@ -137,13 +137,16 @@ async function pickVaultGroup(environment, settings, action) {
  * refusal: the skeleton fills in the environments a service is missing from.
  *
  * @param {string[]} existingNames
+ * @param {{ title: string, prompt: string }} [spec] wording; defaults to the New service skeleton one
  * @returns {Promise<string | undefined>}
  */
-async function pickServiceName(existingNames) {
+async function pickServiceName(existingNames, spec) {
   const taken = new Set(existingNames);
   const name = await vscode.window.showInputBox({
-    title: "New service skeleton",
-    prompt: "Directory name, used for playbooks/<name>/ and group_vars/<name>/ in every environment",
+    title: spec ? spec.title : "New service skeleton",
+    prompt: spec
+      ? spec.prompt
+      : "Directory name, used for playbooks/<name>/ and group_vars/<name>/ in every environment",
     placeHolder: "uptime-kuma",
     ignoreFocusOut: true,
     validateInput: (value) => {

@@ -491,7 +491,7 @@ async function createServiceSkeleton(argument, refresh) {
     failed: `create the skeleton for ${plan.name}`,
   });
   if (created) {
-    await openStarter(plan, created);
+    await openStarter(plan, root, settings, created);
   }
 }
 
@@ -546,7 +546,7 @@ function environmentsWithoutGroup(root, settings, plan) {
   /** @type {string[]} */
   const names = [];
   for (const environment of findEnvironments(root, settings)) {
-    if (!plan.environments.includes(environment.name) || /\.ya?ml$/i.test(environment.inventory)) {
+    if (!plan.environments.includes(environment.name) || scaffold.isYamlInventory(environment.inventory)) {
       continue;
     }
     let text;
@@ -566,10 +566,13 @@ function environmentsWithoutGroup(root, settings, plan) {
  * Open the starter playbook of a plan, when this run created it.
  *
  * @param {import("./src/scaffold").SkeletonPlan} plan
+ * @param {string} root workspace folder path
+ * @param {import("./src/defaults").Settings} settings
  * @param {import("./src/scaffold").SkeletonEntry[]} created
  */
-async function openStarter(plan, created) {
-  const starter = created.find((entry) => entry.type === "file" && path.basename(entry.path) === `${plan.name}.yml`);
+async function openStarter(plan, root, settings, created) {
+  const starterPath = path.join(root, settings.playbooksDir, plan.name, `${plan.name}.yml`);
+  const starter = created.find((entry) => entry.type === "file" && entry.path === starterPath);
   if (starter) {
     await vscode.window.showTextDocument(vscode.Uri.file(starter.path));
   }
@@ -608,7 +611,10 @@ async function getStarted(argument, refresh) {
   if (!environment) {
     return;
   }
-  const service = await pickers.pickServiceName(scaffold.existingServiceNames(root, settings));
+  const service = await pickers.pickServiceName(scaffold.existingServiceNames(root, settings), {
+    title: "Get started: first service",
+    prompt: `Directory name, used for ${settings.playbooksDir}/<name>/ and as the group in ${environment}'s inventory`,
+  });
   if (!service) {
     return;
   }
@@ -623,11 +629,17 @@ async function getStarted(argument, refresh) {
   }
 
   const detail = describeMissing(plan);
+  const starterExists = plan.entries.some(
+    (entry) => entry.type === "file" && entry.exists && entry.path === path.join(root, settings.playbooksDir, service, `${service}.yml`),
+  );
+  const outcome = starterExists
+    ? `${service}.yml already exists and is not the starter playbook \u2014 the inventory puts localhost in the ${service} group, so it will run against this machine.`
+    : `The inventory puts localhost in the ${service} group, so \u25b6 on ${service}.yml runs on this machine.`;
   const answer = await vscode.window.showInformationMessage(
     `Set up ${folder.name} for Ansible?`,
     {
       modal: true,
-      detail: `${detail}\n\nThe inventory puts localhost in the ${service} group, so \u25b6 on ${service}.yml runs on this machine.`,
+      detail: `${detail}\n\n${outcome}`,
     },
     "Create",
   );
@@ -637,7 +649,7 @@ async function getStarted(argument, refresh) {
 
   const created = applyPlan(plan, refresh, { done: `in ${folder.name}.`, failed: `set up ${folder.name}` });
   if (created) {
-    await openStarter(plan, created);
+    await openStarter(plan, root, settings, created);
   }
 }
 

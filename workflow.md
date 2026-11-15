@@ -492,8 +492,8 @@ tree without a reload.
 23. ✅ Get started and starter playbooks: an empty folder can be turned into a
     runnable repository (`playbookRunner.getStarted`, the dashboard's empty
     state), and *Create Service Skeleton…* can write a starter playbook. This
-    is the first time the extension writes a host, and the rule behind steps
-    11 and 21 -- never hosts -- is narrowed rather than dropped: only
+    is the first time the extension writes a host, and the rule behind step
+    21 -- never hosts -- is narrowed rather than dropped: only
     `localhost`, and only into an inventory the command creates itself, so
     the starter playbook has something to run against and nothing can reach a
     machine the user did not name. An existing inventory is still never given
