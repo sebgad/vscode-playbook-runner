@@ -936,7 +936,7 @@ const inventoryPreviews = new Map();
 
 /** @type {vscode.TextDocumentContentProvider} */
 const inventoryPreviewProvider = {
-  provideTextDocumentContent: (uri) => inventoryPreviews.get(uri.path) ?? "",
+  provideTextDocumentContent: (uri) => inventoryPreviews.get(uri.path) ?? "(This preview has expired; close this tab.)",
 };
 
 /**
@@ -970,7 +970,8 @@ function inventoryBlocked(tracker, root, environment, doing) {
  * reloads, and the result carries the short reason.
  *
  * Called once before planning and again right before writing: a dialog can
- * stay open while the file changes underneath it.
+ * stay open while the file changes underneath it. An editor holding unsaved
+ * edits of the file refuses too -- the write would overwrite them, or they it.
  *
  * @param {string} root
  * @param {import("./src/discovery").Environment} environment
@@ -980,6 +981,15 @@ function inventoryBlocked(tracker, root, environment, doing) {
  */
 function readUnchangedInventory(root, environment, hash, refresh) {
   const relative = path.relative(root, environment.inventory);
+  const dirty = vscode.workspace.textDocuments.some(
+    (document) => document.isDirty && document.uri.scheme === "file" && document.uri.fsPath === environment.inventory,
+  );
+  if (dirty) {
+    vscode.window.showWarningMessage(
+      `Playbook Runner: ${relative} has unsaved changes in an editor; save or revert them first.`,
+    );
+    return { error: `${relative} has unsaved changes in an editor` };
+  }
   let text;
   try {
     text = fs.readFileSync(environment.inventory, "utf8");
@@ -1049,33 +1059,29 @@ async function saveInventoryCommand(tracker, argument, edited, refresh) {
   const previewPath = `/${crypto.randomUUID()}/${path.basename(file)}`;
   inventoryPreviews.set(previewPath, next);
   try {
-    for (;;) {
-      const answer = await vscode.window.showInformationMessage(
-        `Save ${relative} for ${environment.name}?`,
-        { modal: true, detail },
-        "Save",
-        "Show diff",
+    const title = `Save ${relative} for ${environment.name}?`;
+    /** @type {string | undefined} */
+    let answer = await vscode.window.showInformationMessage(title, { modal: true, detail }, "Save", "Show diff");
+    if (answer === "Show diff") {
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        vscode.Uri.file(file),
+        vscode.Uri.from({ scheme: INVENTORY_PREVIEW_SCHEME, path: previewPath }),
+        `${environment.name}: ${relative} ↔ after save`,
       );
-      if (answer === "Show diff") {
-        await vscode.commands.executeCommand(
-          "vscode.diff",
-          vscode.Uri.file(file),
-          vscode.Uri.from({ scheme: INVENTORY_PREVIEW_SCHEME, path: previewPath }),
-          `${environment.name}: ${relative} ↔ after save`,
-        );
-        continue;
-      }
-      if (answer !== "Save") {
-        return undefined;
-      }
-      break;
+      // Not modal, so the diff can be read while it waits; dismissing it cancels.
+      answer = await vscode.window.showInformationMessage(title, "Save", "Cancel");
+    }
+    if (answer !== "Save") {
+      return undefined;
     }
   } finally {
     inventoryPreviews.delete(previewPath);
   }
 
-  const description = `a save of ${relative} (${changes.length ? changes.join("; ") : "layout only"})`;
-  if (!(await pickers.confirmProduction(settings, environment, description))) {
+  const count = changes.length;
+  const description = `${relative} (${count ? `${count} change${count === 1 ? "" : "s"}` : "layout only"})`;
+  if (!(await pickers.confirmProduction(settings, environment, description, { verb: "Save", button: "Save" }))) {
     return undefined;
   }
 
@@ -1210,10 +1216,11 @@ async function renameGroupCommand(tracker, argument, hash, group, refresh) {
     title: `Rename group ${group} in ${environment.name}`,
     prompt: "New group name",
     value: group,
+    valueSelection: [0, group.length],
     ignoreFocusOut: true,
     validateInput: (value) => {
       if (value === group) {
-        return "Type the new name, or press Escape to cancel.";
+        return undefined;
       }
       const invalid = inventory.validateGroupName(value);
       if (invalid) {
@@ -1257,7 +1264,12 @@ async function renameGroupCommand(tracker, argument, hash, group, refresh) {
   if (answer !== "Rename") {
     return;
   }
-  if (!(await pickers.confirmProduction(settings, environment, `a rename of the group ${plan.from} to ${plan.to}`))) {
+  if (
+    !(await pickers.confirmProduction(settings, environment, `rename of ${plan.from} to ${plan.to}`, {
+      verb: "Save",
+      button: "Rename",
+    }))
+  ) {
     return;
   }
 
@@ -1313,7 +1325,7 @@ async function deleteGroupCommand(tracker, argument, hash, group, refresh) {
   const relative = path.relative(root, environment.inventory);
   const groupVars = plan.groupVars;
   const groupVarsRelative = groupVars ? `${path.relative(root, groupVars)}/` : "";
-  const trashLabel = "Delete and trash group_vars";
+  const trashLabel = `Delete and trash ${path.basename(environment.groupVarsDir)}`;
   const detail = [
     `${relative}: the sections of ${plan.name} are removed.`,
     plan.services.length ? `Removed from the children of: ${plan.services.join(", ")}` : "",
@@ -1340,7 +1352,8 @@ async function deleteGroupCommand(tracker, argument, hash, group, refresh) {
     !(await pickers.confirmProduction(
       settings,
       environment,
-      `a delete of the group ${plan.name}${trash ? ` and ${groupVarsRelative}` : ""}`,
+      `delete of ${plan.name}${trash ? ` and ${groupVarsRelative}` : ""}`,
+      { verb: "Save", button: "Delete" },
     ))
   ) {
     return;
