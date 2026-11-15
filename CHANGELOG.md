@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Inventory tab
+
+* **Inventory tab**: edit an environment's INI inventory from the dashboard —
+  hosts, their SSH login (`ansible_host`, `ansible_user`, `ansible_port`,
+  `ansible_ssh_private_key_file`, `ansible_ssh_common_args`), other host and
+  group variables, and the groups each service lists as children. Server groups
+  and services can be created, renamed and deleted; a rename or delete carries
+  the group's `group_vars` directory (and the services' children entries)
+  along. *Show diff* reads the change before *Save*.
+* Text between `# playbook-runner: manual begin` and `# playbook-runner:
+  manual end` is kept verbatim; other comments, duplicate sections and entries
+  the page cannot read are dropped or merged on save, and the confirmation says
+  so first.
+* A save is refused while the file has unsaved edits in an editor, while a
+  playbook runs against the environment, or when the file changed on disk since
+  the page loaded. Password variables (`ansible_password`, …) are refused: use
+  the group's vault.
+* Only INI inventories are editable; an environment folder without an
+  inventory file offers *Create inventory*.
+* This lifts the rule that an existing inventory is never given hosts; a new
+  environment modelled on another still gets no copied hosts.
+
 ## 0.6.0
 
 No change to the extension itself: what ships is the same as 0.5.0.

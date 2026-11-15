@@ -113,7 +113,9 @@ to it shows the newest run and runs it again on click.
 * **Beside the environment tabs**: ✎ renames the environment shown, 🗑 deletes
   it, ＋ lays out a new one — see
   [Adding, renaming and deleting an environment](#adding-renaming-and-deleting-an-environment).
-* **The Settings tab** (top left: *Runs | Settings*) shows every setting below
+* **The Inventory tab** (*Runs | Settings | Inventory*) edits the environment's
+  `hosts.ini` — see [Editing the inventory](#editing-the-inventory).
+* **The Settings tab** (top left: *Runs | Settings | Inventory*) shows every setting below
   with its description and where its value comes from (default, User or
   Workspace), with an editor that fits it — text, on/off, a list, or
   environment → password file rows — and *Reset*. A change is saved to this
@@ -132,6 +134,63 @@ production confirmation, remembered as the last run, recorded in the history.
 The palette commands (*Run Playbook*, *Run Playbook with Options…*, *Edit
 Vault*, …) still work without the dashboard, walking environment → service →
 playbook as QuickPicks.
+
+## Editing the inventory
+
+The **Inventory** tab edits the INI inventory of the environment shown, so a
+host, its login or a service's server groups no longer need a text editor. It
+has three parts:
+
+* **Server groups** — `[group]` sections with their hosts. A host opens into
+  its SSH fields (`ansible_host`, `ansible_user`, `ansible_port`,
+  `ansible_ssh_private_key_file`, `ansible_ssh_common_args`) and *Other
+  variables*; the group has *Group variables* and a vault button for its
+  `group_vars` (playbookRunner.groupVarsDir) vault.
+* **Services (access control)** — groups with a `[service:children]` section,
+  where you tick which server groups belong to the service.
+* **Manual sections** — see below.
+
+Nothing is written until *Save*, which first asks for confirmation and lists
+what the rewrite changes. *Show diff* there opens a diff and then asks, without
+blocking, whether to save or cancel. Edits are kept as a draft per environment
+(marked `●` on the tab) until saved or discarded.
+
+**What a save does to the file.** The page writes the whole file from what it
+shows, so anything it cannot show is at risk. The confirmation lists it first:
+comments outside manual blocks, duplicate sections (merged), duplicate entries
+and lines the page cannot read. Quoted values such as `port="22"` keep their
+quotes, and `[all]` is written only when `all` has hosts. To keep a hand-written
+part as it is, put it between two marker lines:
+
+```
+# playbook-runner: manual begin
+[legacy]
+old-box ansible_host=10.0.0.9
+# playbook-runner: manual end
+```
+
+Text between the markers is copied verbatim and shown read-only in *Manual
+sections*, with *Open in editor*. A block that opens a section must be followed
+by a section header, and unbalanced markers are an error; in either case the
+file is read-only in the tab until fixed.
+
+* **No passwords.** `ansible_password`, `ansible_ssh_pass`,
+  `ansible_become_pass` and `ansible_become_password` are refused; put them in
+  the group's vault.
+* **A save is refused** while the file has unsaved edits in an editor, while a
+  playbook runs against the environment, or when the file changed on disk since
+  the page loaded. The draft is then frozen; *Discard* reloads the file.
+* **Rename and delete** (the group's `…` menu) work for server groups and
+  services, once nothing is unsaved. A rename also renames the group's
+  `group_vars/<name>/` in this environment and its entries in services'
+  children. A delete removes the group from every service and offers to move its
+  `group_vars/<name>/` to the trash. File-form group variables
+  (`<name>.yml`, `.yaml`, `.json`) and manual blocks that still name the group
+  are listed in the confirmation but not changed.
+* **Only INI inventories** are editable; a YAML one shows *Editing is only
+  supported for INI inventories.* A folder under `inventories/` with no
+  inventory file offers *Create inventory*, which writes a skeleton containing
+  the marker lines.
 
 ## Running part of a playbook
 
