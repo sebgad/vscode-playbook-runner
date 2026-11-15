@@ -264,6 +264,16 @@ describe("validateInventory", () => {
     assert.match(found[0] ?? "", /"web" is used more than once/);
   });
 
+  it("refuses a duplicate variable key", () => {
+    const inventory = parseInventory("[web]\nh1 ansible_host=a\n[web:vars]\nk=1\n");
+    inventory.serverGroups[0]?.hosts[0]?.vars.push(["ansible_host", "b"]);
+    inventory.serverGroups[0]?.vars.push(["k", "2"]);
+    const found = validateInventory(inventory);
+    assert.equal(found.length, 2);
+    assert.match(found[0] ?? "", /^Group web: k is set more than once/);
+    assert.match(found[1] ?? "", /^Host h1 in web: ansible_host is set more than once/);
+  });
+
   it("refuses a newline in a value", () => {
     const inventory = parseInventory("[web]\nh1\n");
     inventory.serverGroups[0]?.hosts[0]?.vars.push(["k", "a\nb"]);

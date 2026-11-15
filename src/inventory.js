@@ -544,7 +544,16 @@ function validateInventory(inventory) {
    * @param {string} owner
    */
   const checkVars = (group, vars, owner) => {
+    /** @type {Set<string>} */
+    const seen = new Set();
+    /** @type {Set<string>} */
+    const repeated = new Set();
     for (const [key, value] of vars) {
+      if (seen.has(key) && !repeated.has(key)) {
+        repeated.add(key);
+        errors.push(`${owner}: ${key} is set more than once.`);
+      }
+      seen.add(key);
       if (!VAR_NAME.test(key)) {
         errors.push(`${owner}: "${key}" is not a valid variable name.`);
       }

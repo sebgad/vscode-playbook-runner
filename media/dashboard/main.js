@@ -25,18 +25,43 @@
    */
 
   /**
-   * One environment's inventory as the Inventory tab edits it. `added` marks
-   * a group typed in on this page (its name is still editable); it is not
-   * sent. Server groups carry an empty `children`.
+   * One environment's inventory as the Inventory tab edits it.
    *
-   * @typedef {[string, string]} Var
-   * @typedef {{ name: string, vars: Var[] }} Host
-   * @typedef {{ name: string, children: string[], hosts: Host[], vars: Var[], readOnly: boolean, added: boolean }} Group
+   * Page-local, never sent: `uid` identifies a group while it is edited
+   * ("n:<name>" for a group of the file, whose name the page cannot change;
+   * "a:<…>" for one added here, whose name is typed), `added` marks the latter,
+   * and the third element of a var says whether it is an "Other variables"
+   * row (true) or one of the SSH fields of a host (false) -- fixed when the
+   * row is made, so typing a key never moves a row between the two. A child
+   * that is an added group is held as REF + its uid until Save, so renaming
+   * or removing it touches only what points at it. Server groups carry an
+   * empty `children`.
+   *
+   * @typedef {[string, string, boolean]} DraftVar
+   * @typedef {{ name: string, vars: DraftVar[] }} Host
+   * @typedef {{ uid: string, name: string, children: string[], hosts: Host[], vars: DraftVar[], readOnly: boolean, added: boolean }} Group
    * @typedef {{ hash: string, serverGroups: Group[], services: Group[] }} Draft
    */
 
   const MAX_DRAFTS = 50;
   const MAX_ITEMS = 500;
+  /** Prefix of a child that points at an added group by uid; no group name contains it. */
+  const REF = "\u0001";
+  const SSH_FIELDS = [
+    "ansible_host",
+    "ansible_user",
+    "ansible_port",
+    "ansible_ssh_private_key_file",
+    "ansible_ssh_common_args",
+  ];
+  const SSH_FIELD_SET = new Set(SSH_FIELDS);
+  let uidCounter = 0;
+
+  /** @returns {string} */
+  function newUid() {
+    uidCounter += 1;
+    return `a:${Date.now().toString(36)}:${uidCounter}`;
+  }
 
   /** @param {unknown} value @returns {string[] | null} */
   function restoreStrings(value) {
@@ -45,24 +70,35 @@
       : null;
   }
 
-  /** @param {unknown} value @returns {Var[] | null} */
-  function restoreVars(value) {
+  /**
+   * @param {unknown} value
+   * @param {boolean} ofHost  a host's vars have SSH-field rows; a group's do not
+   * @returns {DraftVar[] | null}
+   */
+  function restoreVars(value, ofHost) {
     if (!Array.isArray(value) || value.length > MAX_ITEMS) {
       return null;
     }
-    /** @type {Var[]} */
+    /** @type {DraftVar[]} */
     const vars = [];
     for (const item of value) {
-      if (!Array.isArray(item) || item.length !== 2 || typeof item[0] !== "string" || typeof item[1] !== "string") {
+      if (
+        !Array.isArray(item) ||
+        (item.length !== 2 && item.length !== 3) ||
+        typeof item[0] !== "string" ||
+        typeof item[1] !== "string" ||
+        (item.length === 3 && typeof item[2] !== "boolean")
+      ) {
         return null;
       }
-      vars.push([item[0], item[1]]);
+      const other = item.length === 3 ? item[2] === true : !(ofHost && SSH_FIELD_SET.has(item[0]));
+      vars.push([item[0], item[1], ofHost ? other : true]);
     }
     return vars;
   }
 
-  /** @param {unknown} value @returns {Group[] | null} */
-  function restoreGroups(value) {
+  /** @param {unknown} value @param {Set<string>} uids taken so far @returns {Group[] | null} */
+  function restoreGroups(value, uids) {
     if (!Array.isArray(value) || value.length > MAX_ITEMS) {
       return null;
     }
@@ -73,11 +109,11 @@
         return null;
       }
       const children = restoreStrings(item.children);
-      const vars = restoreVars(item.vars);
+      const vars = restoreVars(item.vars, false);
       /** @type {Host[]} */
       const hosts = [];
       for (const host of item.hosts) {
-        const hostVars = host && typeof host === "object" && typeof host.name === "string" ? restoreVars(host.vars) : null;
+        const hostVars = host && typeof host === "object" && typeof host.name === "string" ? restoreVars(host.vars, true) : null;
         if (!hostVars) {
           return null;
         }
@@ -86,7 +122,17 @@
       if (!children || !vars) {
         return null;
       }
-      groups.push({ name: item.name, children, hosts, vars, readOnly: item.readOnly === true, added: item.added === true });
+      const added = item.added === true;
+      let uid = added ? (typeof item.uid === "string" && item.uid.startsWith("a:") ? item.uid : newUid()) : `n:${item.name}`;
+      if (uids.has(uid)) {
+        // Two groups of a file never share a name; an added one gets a fresh uid.
+        if (!added) {
+          return null;
+        }
+        uid = newUid();
+      }
+      uids.add(uid);
+      groups.push({ uid, name: item.name, children, hosts, vars, readOnly: item.readOnly === true, added });
     }
     return groups;
   }
@@ -94,7 +140,7 @@
   /**
    * Inventory drafts from the saved page state: JSON that survived a reload,
    * possibly from an older page. A draft that does not have the exact shape
-   * is dropped whole rather than half-restored.
+   * is dropped whole rather than half-restored. The newest MAX_DRAFTS are kept.
    *
    * @param {unknown} value
    * @returns {Map<string, Draft>}
@@ -105,12 +151,14 @@
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       return drafts;
     }
-    for (const [key, raw] of Object.entries(value).slice(0, MAX_DRAFTS)) {
+    for (const [key, raw] of Object.entries(value).slice(-MAX_DRAFTS)) {
       if (!raw || typeof raw !== "object" || typeof raw.hash !== "string" || !key.includes("\n")) {
         continue;
       }
-      const serverGroups = restoreGroups(raw.serverGroups);
-      const services = restoreGroups(raw.services);
+      /** @type {Set<string>} */
+      const uids = new Set();
+      const serverGroups = restoreGroups(raw.serverGroups, uids);
+      const services = restoreGroups(raw.services, uids);
       if (serverGroups && services) {
         drafts.set(key, { hash: raw.hash, serverGroups, services });
       }
@@ -549,7 +597,7 @@
       { class: "segmented", role: "tablist", "aria-label": "View" },
       tabButton("runs", "play-circle", "Runs"),
       tabButton("settings", "settings-gear", "Settings"),
-      tabButton("inventory", "server-environment", "Inventory", state.drafts.size > 0),
+      tabButton("inventory", "server-environment", "Inventory", anyShownDraft()),
     );
   }
 
@@ -1515,27 +1563,28 @@
   // checks here are a convenience: the extension rebuilds the message,
   // validates the result again and asks before it writes anything.
 
-  const SSH_FIELDS = [
-    "ansible_host",
-    "ansible_user",
-    "ansible_port",
-    "ansible_ssh_private_key_file",
-    "ansible_ssh_common_args",
-  ];
-  const SSH_FIELD_SET = new Set(SSH_FIELDS);
   const PASSWORD_VARS = new Set(["ansible_password", "ansible_ssh_pass", "ansible_become_pass", "ansible_become_password"]);
   const GROUP_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
   const HOST_NAME = /^[A-Za-z0-9_.\-[\]:]+$/;
   const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  // What parseWebviewMessage (src/model.js) accepts; beyond it a save is refused whole.
+  const CAP_GROUPS = 500;
+  const CAP_HOSTS = 500;
+  const CAP_VARS = 200;
+  const CAP_STRING = 4096;
+  /** How long Save stays disabled waiting for an answer that never comes. */
+  const SAVE_TIMEOUT_MS = 60000;
 
   /** @type {Map<string, string>} draft key -> why the last save was refused */
   const inventoryErrors = new Map();
-  /** @type {Set<string>} expanded server groups, by draft key + index */
+  /** @type {Set<string>} expanded server groups: draft key + "\n" + uid */
   const openGroups = new Set();
-  /** @type {Set<string>} hosts whose form is open, by draft key + group + index */
+  /** @type {Set<string>} hosts whose form is open: draft key + "\n" + uid + "\n" + host index */
   const openHosts = new Set();
   /** @type {string | null} the group whose ⋯ menu is open */
   let openMenu = null;
+  /** @type {Map<string, { hash: string, timer: ReturnType<typeof setTimeout> }>} saves waiting for an answer */
+  const saving = new Map();
 
   /** @param {any} folder @param {any} environment */
   function draftKey(folder, environment) {
@@ -1547,40 +1596,72 @@
     return h("span", { class: "unsaved-mark", title: "Unsaved inventory changes", "aria-label": "unsaved changes" }, "●");
   }
 
-  /** Forget drafts of environments the model no longer has. */
-  function pruneDrafts() {
-    if (!model) {
-      return;
-    }
-    const known = new Set(
-      model.folders.flatMap((/** @type {any} */ f) => f.environments.map((/** @type {any} */ e) => draftKey(f, e))),
+  /** Whether any environment the model shows has a draft. */
+  function anyShownDraft() {
+    return Boolean(
+      model &&
+        model.folders.some((/** @type {any} */ f) =>
+          f.environments.some((/** @type {any} */ e) => state.drafts.has(draftKey(f, e))),
+        ),
     );
-    let pruned = false;
-    for (const key of [...state.drafts.keys()]) {
-      if (!known.has(key)) {
-        state.drafts.delete(key);
-        inventoryErrors.delete(key);
-        pruned = true;
-      }
-    }
-    if (pruned) {
-      persist();
+  }
+
+  /**
+   * Keep at most MAX_DRAFTS, dropping the least recently edited. A draft of
+   * an environment the model does not show now is kept: it comes back with
+   * the environment.
+   */
+  function boundDrafts() {
+    for (const key of [...state.drafts.keys()].slice(0, Math.max(0, state.drafts.size - MAX_DRAFTS))) {
+      state.drafts.delete(key);
+      inventoryErrors.delete(key);
     }
   }
 
-  /** @param {any} group @returns {Group} */
+  /** @param {string} key */
+  function stopSaving(key) {
+    const pending = saving.get(key);
+    if (pending) {
+      clearTimeout(pending.timer);
+      saving.delete(key);
+    }
+  }
+
+  /** A new model ends the wait of a save whose file has changed (or gone). */
+  function settleSaving() {
+    for (const [key, pending] of [...saving]) {
+      const environment = model.folders
+        .flatMap((/** @type {any} */ f) => f.environments.map((/** @type {any} */ e) => ({ key: draftKey(f, e), e })))
+        .find((/** @type {any} */ item) => item.key === key);
+      if (!environment || environment.e.inventory.hash !== pending.hash) {
+        stopSaving(key);
+      }
+    }
+  }
+
+  /** @param {any} vars @param {boolean} ofHost @returns {DraftVar[]} */
+  function copyVars(vars, ofHost) {
+    return vars.map(
+      (/** @type {any} */ v) => /** @type {DraftVar} */ ([String(v[0]), String(v[1]), !(ofHost && SSH_FIELD_SET.has(String(v[0])))]),
+    );
+  }
+
+  /** A group of the model as the page edits it. @param {any} group @returns {Group} */
   function copyGroup(group) {
     return {
+      uid: `n:${group.name}`,
       name: String(group.name),
       children: Array.isArray(group.children) ? group.children.map(String) : [],
-      hosts: group.hosts.map((/** @type {any} */ host) => ({
-        name: String(host.name),
-        vars: host.vars.map((/** @type {any} */ v) => /** @type {Var} */ ([String(v[0]), String(v[1])])),
-      })),
-      vars: group.vars.map((/** @type {any} */ v) => /** @type {Var} */ ([String(v[0]), String(v[1])])),
+      hosts: group.hosts.map((/** @type {any} */ host) => ({ name: String(host.name), vars: copyVars(host.vars, true) })),
+      vars: copyVars(group.vars, false),
       readOnly: Boolean(group.readOnly),
       added: false,
     };
+  }
+
+  /** @returns {Group} */
+  function newGroup(name = "") {
+    return { uid: newUid(), name, children: [], hosts: [], vars: [], readOnly: false, added: true };
   }
 
   /**
@@ -1611,8 +1692,8 @@
       draft,
       frozen,
       canEdit: Boolean(inventory.editable) && !frozen,
-      serverGroups: draft ? draft.serverGroups : inventory.serverGroups,
-      services: draft ? draft.services : inventory.services,
+      serverGroups: draft ? draft.serverGroups : inventory.serverGroups.map(copyGroup),
+      services: draft ? draft.services : inventory.services.map(copyGroup),
     };
   }
 
@@ -1633,36 +1714,103 @@
         serverGroups: ctx.inventory.serverGroups.map(copyGroup),
         services: ctx.inventory.services.map(copyGroup),
       };
-      state.drafts.set(ctx.key, draft);
     }
+    // Re-inserted, so the map runs from least to most recently edited.
+    state.drafts.delete(ctx.key);
+    state.drafts.set(ctx.key, draft);
+    boundDrafts();
     change(draft);
     persist();
     render();
   }
 
-  /** @param {Var[]} vars @param {string} key @param {string} value */
-  function setVar(vars, key, value) {
-    const at = vars.findIndex((v) => v[0] === key);
-    if (!value) {
-      if (at >= 0) {
-        vars.splice(at, 1);
-      }
-    } else if (at >= 0) {
-      vars[at] = [key, value];
-    } else {
-      vars.push([key, value]);
+  /** The SSH-field row of a host's vars, not an "Other variables" row of the same key. @param {DraftVar[]} vars @param {string} field */
+  function sshEntry(vars, field) {
+    return vars.find((v) => !v[2] && v[0] === field);
+  }
+
+  /** @param {DraftVar[]} vars @param {string} field */
+  function getSsh(vars, field) {
+    const found = sshEntry(vars, field);
+    return found ? found[1] : "";
+  }
+
+  /**
+   * Set an SSH field. A cleared field keeps its row (and so its place in the
+   * file) while editing; Save leaves empty SSH rows out.
+   *
+   * @param {DraftVar[]} vars @param {string} field @param {string} value
+   */
+  function setSsh(vars, field, value) {
+    const found = sshEntry(vars, field);
+    if (found) {
+      found[1] = value;
+    } else if (value) {
+      vars.push([field, value, false]);
     }
   }
 
-  /** @param {Var[]} vars @param {string} key */
-  function getVar(vars, key) {
-    const found = vars.find((v) => v[0] === key);
-    return found ? found[1] : "";
+  /** The vars as they will be sent. @param {DraftVar[]} vars @returns {[string, string][]} */
+  function sentVars(vars) {
+    return vars.filter((v) => v[2] || v[1] !== "").map((v) => /** @type {[string, string]} */ ([v[0], v[1]]));
+  }
+
+  /** Keys that would be sent more than once. @param {DraftVar[]} vars @returns {Set<string>} */
+  function repeatedKeys(vars) {
+    /** @type {Set<string>} */
+    const seen = new Set();
+    /** @type {Set<string>} */
+    const repeated = new Set();
+    for (const [key] of sentVars(vars)) {
+      if (seen.has(key)) {
+        repeated.add(key);
+      }
+      seen.add(key);
+    }
+    return repeated;
+  }
+
+  /** @param {Draft} draft @param {string} uid */
+  function groupByUid(draft, uid) {
+    return [...draft.serverGroups, ...draft.services].find((g) => g.uid === uid);
   }
 
   /** @param {string} file */
   function baseName(file) {
     return String(file).split(/[\\/]/).pop() || String(file);
+  }
+
+  /**
+   * What Save sends: read-only groups left out (the extension takes them from
+   * the file), page-local fields dropped, children that point at an added
+   * group turned into its name.
+   *
+   * @param {Draft} draft
+   */
+  function savePayload(draft) {
+    /** @param {Group} g */
+    const plain = (g) => ({
+      name: g.name,
+      hosts: g.hosts.map((host) => ({ name: host.name, vars: sentVars(host.vars) })),
+      vars: sentVars(g.vars),
+    });
+    /** @param {string} child */
+    const childName = (child) => {
+      if (!child.startsWith(REF)) {
+        return child;
+      }
+      const target = groupByUid(draft, child.slice(REF.length));
+      return target && target.name ? target.name : null;
+    };
+    return {
+      serverGroups: draft.serverGroups.filter((g) => !g.readOnly).map(plain),
+      services: draft.services
+        .filter((g) => !g.readOnly)
+        .map((g) => ({
+          ...plain(g),
+          children: [...new Set(g.children.map(childName).filter((name) => name !== null))],
+        })),
+    };
   }
 
   /** @param {InventoryContext} ctx @returns {Map<string, number>} */
@@ -1721,6 +1869,52 @@
     return VAR_NAME.test(key) ? null : `"${key}" is not a valid variable name.`;
   }
 
+  /** @param {string} key */
+  function repeatedProblem(key) {
+    return `${key} is set more than once.`;
+  }
+
+  /** What the message parser would refuse in the payload. @param {ReturnType<typeof savePayload>} payload @returns {string[]} */
+  function capProblems(payload) {
+    /** @type {string[]} */
+    const problems = [];
+    if (payload.serverGroups.length > CAP_GROUPS || payload.services.length > CAP_GROUPS) {
+      problems.push(`More than ${CAP_GROUPS} server groups or services.`);
+    }
+    let longString = false;
+    /** @param {string} text */
+    const check = (text) => {
+      longString = longString || text.length > CAP_STRING;
+    };
+    for (const group of [...payload.serverGroups, ...payload.services]) {
+      check(group.name);
+      if (group.hosts.length > CAP_HOSTS) {
+        problems.push(`${group.name} has more than ${CAP_HOSTS} hosts.`);
+      }
+      const children = "children" in group ? /** @type {string[]} */ (group.children) : [];
+      if (children.length > CAP_GROUPS) {
+        problems.push(`${group.name} has more than ${CAP_GROUPS} children.`);
+      }
+      children.forEach(check);
+      /** @type {{ owner: string, vars: [string, string][] }[]} */
+      const lists = [{ owner: group.name, vars: group.vars }, ...group.hosts.map((host) => ({ owner: host.name, vars: host.vars }))];
+      for (const { owner, vars } of lists) {
+        if (vars.length > CAP_VARS) {
+          problems.push(`${owner} has more than ${CAP_VARS} variables.`);
+        }
+        for (const [key, value] of vars) {
+          check(key);
+          check(value);
+        }
+      }
+      group.hosts.forEach((host) => check(host.name));
+    }
+    if (longString) {
+      problems.push(`A name or value is longer than ${CAP_STRING} characters.`);
+    }
+    return problems;
+  }
+
   /** Everything the page would refuse in the draft. @param {InventoryContext} ctx @returns {string[]} */
   function draftProblems(ctx) {
     if (!ctx.draft) {
@@ -1738,25 +1932,33 @@
       if (invalid) {
         problems.push(invalid);
       }
-      for (const [key] of group.vars) {
+      for (const [key] of sentVars(group.vars)) {
         const problem = varProblem(key, group.name);
         if (problem) {
           problems.push(`Group ${label}: ${problem}`);
         }
       }
+      for (const key of repeatedKeys(group.vars)) {
+        problems.push(`Group ${label}: ${repeatedProblem(key)}`);
+      }
       group.hosts.forEach((host, index) => {
+        const owner = `Host ${host.name || "(no name)"} in ${label}`;
         const problem = hostNameProblem(group, index);
         if (problem) {
           problems.push(`Group ${label}: ${problem}`);
         }
-        for (const [key] of host.vars) {
+        for (const [key] of sentVars(host.vars)) {
           const varIssue = varProblem(key, group.name);
           if (varIssue) {
-            problems.push(`Host ${host.name || "(no name)"} in ${label}: ${varIssue}`);
+            problems.push(`${owner}: ${varIssue}`);
           }
+        }
+        for (const key of repeatedKeys(host.vars)) {
+          problems.push(`${owner}: ${repeatedProblem(key)}`);
         }
       });
     }
+    problems.push(...capProblems(savePayload(ctx.draft)));
     return [...new Set(problems)];
   }
 
@@ -1770,12 +1972,12 @@
    * off, so a frozen draft's values can still be selected and copied.
    *
    * @param {InventoryContext} ctx
-   * @param {{ key: string, value: string, placeholder?: string, label: string, editable: boolean, mono?: boolean, onInput: (draft: Draft, value: string) => void }} spec
+   * @param {{ key: string, value: string, placeholder?: string, label: string, editable: boolean, onInput: (draft: Draft, value: string) => void }} spec
    */
   function draftInput(ctx, spec) {
     return h("input", {
       type: "text",
-      class: spec.mono === false ? "" : "mono",
+      class: "mono",
       value: spec.value,
       placeholder: spec.placeholder || undefined,
       "aria-label": spec.label,
@@ -1790,25 +1992,18 @@
   }
 
   /**
-   * @param {InventoryContext} ctx @param {"serverGroups" | "services"} kind @param {number} index
-   * @returns {(draft: Draft) => Group | undefined}
-   */
-  function groupIn(ctx, kind, index) {
-    return (draft) => draft[kind][index];
-  }
-
-  /**
-   * Key/value rows. `skip` hides keys shown elsewhere (the SSH fields); the
-   * row indices stay those of the full list.
+   * Key/value rows of the "Other variables" kind. A host's SSH-field rows are
+   * left to the form; the row indices stay those of the full list.
    *
    * @param {InventoryContext} ctx
-   * @param {(draft: Draft) => Var[] | undefined} varsOf
-   * @param {Var[]} vars
-   * @param {{ editable: boolean, keyBase: string, groupName: string, skip?: Set<string>, title: string }} spec
+   * @param {(draft: Draft) => DraftVar[] | undefined} varsOf
+   * @param {DraftVar[]} vars
+   * @param {{ editable: boolean, keyBase: string, groupName: string, title: string }} spec
    */
   function varsEditor(ctx, varsOf, vars, spec) {
-    const rows = vars.map(([key, value], index) =>
-      spec.skip && spec.skip.has(key)
+    const repeated = repeatedKeys(vars);
+    const rows = vars.map(([key, value, other], index) =>
+      !other
         ? null
         : h(
             "div",
@@ -1852,7 +2047,7 @@
                   icon("close"),
                 )
               : null,
-            fieldWarning(varProblem(key, spec.groupName)),
+            fieldWarning(varProblem(key, spec.groupName) || (repeated.has(key) ? repeatedProblem(key) : null)),
           ),
     );
     const shown = rows.filter(Boolean);
@@ -1867,7 +2062,7 @@
             {
               class: "link",
               "data-key": `${spec.keyBase}:add`,
-              onclick: () => mutate(ctx, (draft) => (varsOf(draft) || []).push(["", ""])),
+              onclick: () => mutate(ctx, (draft) => (varsOf(draft) || []).push(["", "", true])),
             },
             icon("add"),
             "Variable",
@@ -1914,9 +2109,9 @@
    * added in the draft. Renaming and deleting go through the extension, which
    * asks and writes at once -- so not over an unsaved draft.
    *
-   * @param {InventoryContext} ctx @param {"serverGroups" | "services"} kind @param {number} index @param {Group} group
+   * @param {InventoryContext} ctx @param {"serverGroups" | "services"} kind @param {Group} group
    */
-  function groupMenu(ctx, kind, index, group) {
+  function groupMenu(ctx, kind, group) {
     if (group.readOnly) {
       return null;
     }
@@ -1930,19 +2125,19 @@
           disabled: !ctx.canEdit,
           onclick: () =>
             mutate(ctx, (draft) => {
-              const [removed] = draft[kind].splice(index, 1);
-              if (removed && removed.name) {
-                for (const service of draft.services) {
-                  service.children = service.children.filter((child) => child !== removed.name);
-                }
+              draft[kind] = draft[kind].filter((g) => g.uid !== group.uid);
+              // Only what points at this group by its uid; a same-named
+              // group of the file keeps its children.
+              for (const service of draft.services) {
+                service.children = service.children.filter((child) => child !== REF + group.uid);
               }
-              openGroups.delete(`${ctx.key}\n${kind}\n${index}`);
+              openGroups.delete(`${ctx.key}\n${group.uid}`);
             }),
         },
         icon("close"),
       );
     }
-    const menuKey = `${ctx.key}\n${kind}\n${group.name}`;
+    const menuKey = `${ctx.key}\n${group.uid}`;
     const blocked = Boolean(ctx.draft);
     const open = openMenu === menuKey && !blocked;
     /** @param {"renameGroup" | "deleteGroup"} type */
@@ -1989,11 +2184,11 @@
 
   /**
    * The name of a group: text, or an input for a group added in the draft.
-   * Renaming an added group carries the services' children along.
+   * Children point at an added group by uid, so typing its name moves nothing.
    *
-   * @param {InventoryContext} ctx @param {"serverGroups" | "services"} kind @param {number} index @param {Group} group @param {Map<string, number>} counts
+   * @param {InventoryContext} ctx @param {"serverGroups" | "services"} kind @param {Group} group @param {Map<string, number>} counts
    */
-  function groupName(ctx, kind, index, group, counts) {
+  function groupName(ctx, kind, group, counts) {
     if (!group.added) {
       return h("code", { class: "group-name" }, group.name);
     }
@@ -2001,22 +2196,15 @@
       "span",
       { class: "group-name-edit" },
       draftInput(ctx, {
-        key: `inv:${kind}:${index}:name`,
+        key: `inv:${group.uid}:name`,
         value: group.name,
         placeholder: kind === "services" ? "service name" : "group name",
         label: kind === "services" ? "Name of the new service" : "Name of the new server group",
         editable: ctx.canEdit,
         onInput: (draft, text) => {
-          const target = draft[kind][index];
-          if (!target) {
-            return;
-          }
-          const before = target.name;
-          target.name = text;
-          if (before) {
-            for (const service of draft.services) {
-              service.children = service.children.map((child) => (child === before ? text : child));
-            }
+          const target = groupByUid(draft, group.uid);
+          if (target) {
+            target.name = text;
           }
         },
       }),
@@ -2026,65 +2214,85 @@
 
   const READ_ONLY_HINT = "part of a manual group — move it into the block to keep comments";
 
+  /**
+   * The groups a service can list: every server group, every other service
+   * and every manual group. An added group is offered by uid.
+   *
+   * @param {InventoryContext} ctx @param {Group} service
+   * @returns {{ value: string, label: string }[]}
+   */
+  function childChoices(ctx, service) {
+    /** @type {Map<string, string>} value -> label */
+    const choices = new Map();
+    for (const group of [...ctx.serverGroups, ...ctx.services]) {
+      if (group.uid !== service.uid && group.name) {
+        choices.set(group.added ? REF + group.uid : group.name, group.name);
+      }
+    }
+    for (const name of /** @type {string[]} */ (ctx.inventory.manualGroups || [])) {
+      choices.set(name, name);
+    }
+    // A child that is no group any more stays visible, to be unticked.
+    for (const child of service.children) {
+      if (!child.startsWith(REF)) {
+        choices.set(child, choices.get(child) || child);
+      }
+    }
+    if (!service.added) {
+      choices.delete(service.name);
+    }
+    return [...choices].map(([value, label]) => ({ value, label }));
+  }
+
   /** @param {InventoryContext} ctx */
   function servicesSection(ctx) {
     const counts = nameCounts(ctx);
-    const manualGroups = /** @type {string[]} */ (ctx.inventory.manualGroups || []);
     const taken = new Set([...ctx.serverGroups, ...ctx.services].map((g) => g.name));
     const unlisted = /** @type {string[]} */ (ctx.inventory.unlisted || []).filter((name) => !taken.has(name));
 
-    const rows = ctx.services.map((service, index) => {
+    const rows = ctx.services.map((service) => {
       const editable = ctx.canEdit && !service.readOnly;
-      const choices = [
-        ...new Set([
-          ...ctx.serverGroups.map((g) => g.name),
-          ...ctx.services.filter((_, other) => other !== index).map((g) => g.name),
-          ...manualGroups,
-          // A child that is no group any more stays visible, to be unticked.
-          ...service.children,
-        ]),
-      ].filter((name) => name && name !== service.name);
-      const members = service.children;
+      const choices = childChoices(ctx, service);
       return h(
         "div",
         { class: `inv-row service-row ${service.readOnly ? "read-only" : ""}` },
         h(
           "div",
           { class: "inv-row-head" },
-          groupName(ctx, "services", index, service, counts),
+          groupName(ctx, "services", service, counts),
           h("span", { class: "spacer" }),
           vaultButton(ctx, service.name),
-          groupMenu(ctx, "services", index, service),
+          groupMenu(ctx, "services", service),
         ),
         h(
           "div",
           { class: "children", role: "group", "aria-label": `Groups in ${service.name || "the new service"}` },
           choices.length
-            ? choices.map((choice) =>
-                h(
+            ? choices.map((choice) => {
+                const on = service.children.includes(choice.value);
+                return h(
                   "label",
-                  { class: `child ${members.includes(choice) ? "on" : ""}` },
+                  { class: `child ${on ? "on" : ""}` },
                   h("input", {
                     type: "checkbox",
-                    checked: members.includes(choice),
+                    checked: on,
                     disabled: !editable,
-                    "data-key": `inv:services:${index}:child:${choice}`,
+                    "data-key": `inv:${service.uid}:child:${choice.value}`,
                     onchange: (/** @type {Event} */ e) => {
-                      const on = /** @type {HTMLInputElement} */ (e.target).checked;
+                      const checked = /** @type {HTMLInputElement} */ (e.target).checked;
                       mutate(ctx, (draft) => {
-                        const target = draft.services[index];
+                        const target = groupByUid(draft, service.uid);
                         if (!target) {
                           return;
                         }
-                        target.children = on
-                          ? [...target.children.filter((c) => c !== choice), choice]
-                          : target.children.filter((c) => c !== choice);
+                        const rest = target.children.filter((c) => c !== choice.value);
+                        target.children = checked ? [...rest, choice.value] : rest;
                       });
                     },
                   }),
-                  choice,
-                ),
-              )
+                  choice.label,
+                );
+              })
             : h("span", { class: "note" }, "No groups to choose from yet."),
         ),
         service.hosts.length || service.vars.length
@@ -2118,10 +2326,7 @@
               {
                 class: "icon-button",
                 "data-key": "inv-add-service",
-                onclick: () =>
-                  mutate(ctx, (draft) => {
-                    draft.services.push({ name: "", children: [], hosts: [], vars: [], readOnly: false, added: true });
-                  }),
+                onclick: () => mutate(ctx, (draft) => draft.services.push(newGroup())),
               },
               icon("add"),
               h("span", { class: "label" }, "Service"),
@@ -2141,10 +2346,7 @@
               class: "link",
               disabled: !ctx.canEdit,
               "data-key": `inv-unlisted:${name}`,
-              onclick: () =>
-                mutate(ctx, (draft) => {
-                  draft.services.push({ name, children: [], hosts: [], vars: [], readOnly: false, added: true });
-                }),
+              onclick: () => mutate(ctx, (draft) => draft.services.push(newGroup(name))),
             },
             icon("add"),
             "Add",
@@ -2157,28 +2359,29 @@
   /**
    * One host: a summary line, and the form when it is open.
    *
-   * @param {InventoryContext} ctx @param {number} groupIndex @param {Group} group @param {number} index @param {boolean} editable
+   * @param {InventoryContext} ctx @param {Group} group @param {number} index @param {boolean} editable
    */
-  function hostView(ctx, groupIndex, group, index, editable) {
+  function hostView(ctx, group, index, editable) {
     const host = /** @type {Host} */ (group.hosts[index]);
-    const formKey = `${ctx.key}\nserverGroups\n${groupIndex}\n${index}`;
+    const formKey = `${ctx.key}\n${group.uid}\n${index}`;
     const open = openHosts.has(formKey);
-    const keyBase = `inv:serverGroups:${groupIndex}:host:${index}`;
+    const keyBase = `inv:${group.uid}:host:${index}`;
     const hostOf = (/** @type {Draft} */ draft) => {
-      const target = draft.serverGroups[groupIndex];
+      const target = groupByUid(draft, group.uid);
       return target ? target.hosts[index] : undefined;
     };
     const first = group.hosts[0];
-    const user = getVar(host.vars, "ansible_user");
-    const key = getVar(host.vars, "ansible_ssh_private_key_file");
+    const user = getSsh(host.vars, "ansible_user");
+    const key = getSsh(host.vars, "ansible_ssh_private_key_file");
+    const repeated = repeatedKeys(host.vars);
     const problem = hostNameProblem(group, index);
-    const varIssue = host.vars.some(([k]) => varProblem(k, group.name));
+    const varIssue = repeated.size > 0 || sentVars(host.vars).some(([k]) => varProblem(k, group.name));
 
     const summary = h(
       "div",
       { class: `host-line ${problem || varIssue ? "invalid" : ""}` },
       h("code", { class: "host-name" }, host.name || "(no name)"),
-      h("span", { class: "muted" }, getVar(host.vars, "ansible_host")),
+      h("span", { class: "muted" }, getSsh(host.vars, "ansible_host")),
       user ? h("span", { class: "muted" }, `user ${user}`) : null,
       key ? h("span", { class: "muted" }, `key ${key}`) : null,
       h("span", { class: "spacer" }),
@@ -2209,13 +2412,13 @@
               "aria-label": `Remove ${host.name || "this host"}`,
               onclick: () =>
                 mutate(ctx, (draft) => {
-                  const target = draft.serverGroups[groupIndex];
+                  const target = groupByUid(draft, group.uid);
                   if (target) {
                     target.hosts.splice(index, 1);
                   }
                   // The open forms are by index; the ones after it moved.
                   for (const other of [...openHosts]) {
-                    if (other.startsWith(`${ctx.key}\nserverGroups\n${groupIndex}\n`)) {
+                    if (other.startsWith(`${ctx.key}\n${group.uid}\n`)) {
                       openHosts.delete(other);
                     }
                   }
@@ -2261,17 +2464,18 @@
             h("span", { class: "form-label" }, field),
             draftInput(ctx, {
               key: `${keyBase}:ssh:${field}`,
-              value: getVar(host.vars, field),
-              placeholder: first ? getVar(first.vars, field) : "",
+              value: getSsh(host.vars, field),
+              placeholder: first ? getSsh(first.vars, field) : "",
               label: field,
               editable,
               onInput: (draft, text) => {
                 const target = hostOf(draft);
                 if (target) {
-                  setVar(target.vars, field, text);
+                  setSsh(target.vars, field, text);
                 }
               },
             }),
+            fieldWarning(repeated.has(field) && getSsh(host.vars, field) ? repeatedProblem(field) : null),
           ),
         ),
         varsEditor(
@@ -2281,7 +2485,7 @@
             return target ? target.vars : undefined;
           },
           host.vars,
-          { editable, keyBase: `${keyBase}:var`, groupName: group.name, skip: SSH_FIELD_SET, title: "Other variables" },
+          { editable, keyBase: `${keyBase}:var`, groupName: group.name, title: "Other variables" },
         ),
       ),
     );
@@ -2290,8 +2494,8 @@
   /** @param {InventoryContext} ctx */
   function serverGroupsSection(ctx) {
     const counts = nameCounts(ctx);
-    const groups = ctx.serverGroups.map((group, index) => {
-      const openKey = `${ctx.key}\nserverGroups\n${index}`;
+    const groups = ctx.serverGroups.map((group) => {
+      const openKey = `${ctx.key}\n${group.uid}`;
       const open = openGroups.has(openKey);
       const editable = ctx.canEdit && !group.readOnly;
       const hostCount = `${group.hosts.length} host${group.hosts.length === 1 ? "" : "s"}`;
@@ -2307,7 +2511,7 @@
               class: "group-toggle",
               "aria-expanded": String(open),
               "aria-label": `${open ? "Collapse" : "Expand"} ${group.name || "the new group"}`,
-              "data-key": `inv:serverGroups:${index}:toggle`,
+              "data-key": `inv:${group.uid}:toggle`,
               onclick: () => {
                 if (open) {
                   openGroups.delete(openKey);
@@ -2319,12 +2523,12 @@
             },
             icon(open ? "chevron-down" : "chevron-right"),
           ),
-          groupName(ctx, "serverGroups", index, group, counts),
+          groupName(ctx, "serverGroups", group, counts),
           h("span", { class: "muted" }, hostCount),
           group.readOnly ? h("span", { class: "badge" }, icon("lock"), "read-only") : null,
           h("span", { class: "spacer" }),
           vaultButton(ctx, group.name),
-          groupMenu(ctx, "serverGroups", index, group),
+          groupMenu(ctx, "serverGroups", group),
         ),
         group.readOnly ? h("p", { class: "note" }, READ_ONLY_HINT) : null,
         open
@@ -2332,20 +2536,20 @@
               "div",
               { class: "inv-group-body" },
               group.hosts.length
-                ? group.hosts.map((_, hostIndex) => hostView(ctx, index, group, hostIndex, editable))
+                ? group.hosts.map((_, hostIndex) => hostView(ctx, group, hostIndex, editable))
                 : h("p", { class: "note" }, "No hosts."),
               editable
                 ? h(
                     "button",
                     {
                       class: "link",
-                      "data-key": `inv:serverGroups:${index}:add-host`,
+                      "data-key": `inv:${group.uid}:add-host`,
                       onclick: () =>
                         mutate(ctx, (draft) => {
-                          const target = draft.serverGroups[index];
+                          const target = groupByUid(draft, group.uid);
                           if (target) {
                             target.hosts.push({ name: "", vars: [] });
-                            openHosts.add(`${ctx.key}\nserverGroups\n${index}\n${target.hosts.length - 1}`);
+                            openHosts.add(`${ctx.key}\n${group.uid}\n${target.hosts.length - 1}`);
                           }
                         }),
                     },
@@ -2356,11 +2560,11 @@
               varsEditor(
                 ctx,
                 (draft) => {
-                  const target = groupIn(ctx, "serverGroups", index)(draft);
+                  const target = groupByUid(draft, group.uid);
                   return target ? target.vars : undefined;
                 },
                 group.vars,
-                { editable, keyBase: `inv:serverGroups:${index}:var`, groupName: group.name, title: "Group variables" },
+                { editable, keyBase: `inv:${group.uid}:var`, groupName: group.name, title: "Group variables" },
               ),
             )
           : null,
@@ -2384,8 +2588,9 @@
                 "data-key": "inv-add-server-group",
                 onclick: () =>
                   mutate(ctx, (draft) => {
-                    draft.serverGroups.push({ name: "", children: [], hosts: [], vars: [], readOnly: false, added: true });
-                    openGroups.add(`${ctx.key}\nserverGroups\n${draft.serverGroups.length - 1}`);
+                    const group = newGroup();
+                    draft.serverGroups.push(group);
+                    openGroups.add(`${ctx.key}\n${group.uid}`);
                   }),
               },
               icon("add"),
@@ -2514,7 +2719,8 @@
     const problems = draftProblems(ctx);
     const warnings = /** @type {string[]} */ (ctx.inventory.warnings || []);
     const error = inventoryErrors.get(ctx.key);
-    const canSave = Boolean(ctx.draft) && ctx.canEdit && !problems.length;
+    const pending = saving.has(ctx.key);
+    const canSave = Boolean(ctx.draft) && ctx.canEdit && !problems.length && !pending;
     return h(
       "footer",
       { class: `runbar savebar ${ctx.environment.isProduction ? "production" : ""}` },
@@ -2531,7 +2737,11 @@
         { class: "runbar-line" },
         error ? h("span", { class: "error" }, icon("error"), error) : null,
         h("span", { class: "spacer" }),
-        ctx.draft ? h("span", { class: "unsaved" }, unsavedMark(), " unsaved changes") : null,
+        pending
+          ? h("span", { class: "unsaved" }, icon("loading", "codicon-modifier-spin"), " saving…")
+          : ctx.draft
+            ? h("span", { class: "unsaved" }, unsavedMark(), " unsaved changes")
+            : null,
         h(
           "button",
           {
@@ -2542,6 +2752,7 @@
             onclick: () => {
               state.drafts.delete(ctx.key);
               inventoryErrors.delete(ctx.key);
+              stopSaving(ctx.key);
               openMenu = null;
               persist();
               render();
@@ -2559,25 +2770,24 @@
             title: problems.length ? "Fix the problems listed above first" : undefined,
             onclick: () => {
               const draft = ctx.draft;
-              if (!draft) {
+              if (!draft || saving.has(ctx.key)) {
                 return;
               }
               inventoryErrors.delete(ctx.key);
-              // Read-only groups are taken from the file by the extension.
-              const plain = (/** @type {Group} */ g) => ({
-                name: g.name,
-                hosts: g.hosts.map((host) => ({ name: host.name, vars: host.vars.map((v) => [v[0], v[1]]) })),
-                vars: g.vars.map((v) => [v[0], v[1]]),
+              const key = ctx.key;
+              saving.set(key, {
+                hash: ctx.inventory.hash,
+                timer: setTimeout(() => {
+                  saving.delete(key);
+                  render();
+                }, SAVE_TIMEOUT_MS),
               });
               vscode.postMessage({
                 type: "saveInventory",
                 folder: ctx.folder.path,
                 environment: ctx.environment.name,
                 hash: draft.hash,
-                serverGroups: draft.serverGroups.filter((g) => !g.readOnly).map(plain),
-                services: draft.services
-                  .filter((g) => !g.readOnly)
-                  .map((g) => ({ ...plain(g), children: [...g.children] })),
+                ...savePayload(draft),
               });
               render();
             },
@@ -2689,7 +2899,15 @@
       ];
     }
     const banner = environment.isProduction
-      ? h("div", { class: "banner", role: "status" }, icon("warning"), h("strong", null, "production"), " — runs here ask for confirmation before they start.")
+      ? h(
+          "div",
+          { class: "banner", role: "status" },
+          icon("warning"),
+          h("strong", null, "production"),
+          state.tab === "inventory"
+            ? " — Saving here asks for confirmation."
+            : " — runs here ask for confirmation before they start.",
+        )
       : h("div");
     if (state.tab === "inventory") {
       const ctx = inventoryContext(folder, environment);
@@ -2737,7 +2955,7 @@
       model = message.model;
       setupTags = message.setupTags || {};
       settings = Array.isArray(message.settings) ? message.settings : [];
-      pruneDrafts();
+      settleSaving();
       render();
       requestPreview();
       // Outlines are re-read on a model refresh: a file changed on disk is
@@ -2760,8 +2978,16 @@
         return;
       }
       const key = `${message.folder}\n${message.environment}`;
+      stopSaving(key);
       if (message.error === null) {
         // Saved, or nothing to save: the file on disk is the truth again.
+        // Groups added and open stay open under the uid they now have.
+        const draft = state.drafts.get(key);
+        for (const group of draft ? [...draft.serverGroups, ...draft.services] : []) {
+          if (group.added && openGroups.has(`${key}\n${group.uid}`)) {
+            openGroups.add(`${key}\nn:${group.name}`);
+          }
+        }
         state.drafts.delete(key);
         inventoryErrors.delete(key);
         persist();
