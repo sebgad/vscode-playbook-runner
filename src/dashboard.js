@@ -97,6 +97,9 @@ function settingViews(context) {
  * @property {(node: object, action: "edit" | "create") => Promise<void>} vault
  * @property {(node: object) => Promise<void>} rekey
  * @property {(node: object) => Promise<void>} createService
+ * @property {(node: object) => Promise<void>} createEnvironment
+ * @property {(node: object) => Promise<void>} renameEnvironment
+ * @property {(node: object) => Promise<void>} deleteEnvironment
  * @property {() => Promise<void>} rerunLast
  */
 
@@ -319,6 +322,22 @@ class DashboardPanel {
       const workspaceFolder = folder && workspaceFolderAt(folder.path);
       if (workspaceFolder) {
         await this.deps.actions.createService({ folder: workspaceFolder });
+      }
+      return;
+    }
+    if (message.type === "createEnvironment") {
+      const folder = model.resolveFolderRequest(this.model, message.folder);
+      const workspaceFolder = folder && workspaceFolderAt(folder.path);
+      if (workspaceFolder) {
+        await this.deps.actions.createEnvironment({ folder: workspaceFolder });
+      }
+      return;
+    }
+    if (message.type === "renameEnvironment" || message.type === "deleteEnvironment") {
+      const found = model.resolveEnvironmentRequest(this.model, message.folder, message.environment);
+      const target = found && this.discovered(found.folder.path, found.environment.name);
+      if (target) {
+        await this.deps.actions[message.type](target);
       }
       return;
     }

@@ -47,7 +47,9 @@ to it shows the newest run and runs it again on click.
 * **A playbook card**: `▶` runs it now with no options. Expanded, it shows its
   **tags** in run order — `▷` runs only that tag, a click on the tag adds it to
   `--tags` — and its plays and tasks, read the same way (see
-  [Where the tag list comes from](#where-the-tag-list-comes-from)).
+  [Where the tag list comes from](#where-the-tag-list-comes-from)). A tag in
+  `--tags` is filled and ticked; a yellow tag runs without being selected: a
+  `playbookRunner.setupTags` tag before a task range, or ansible's `always`.
 * **Click a task** to start a range there, click another to end it; hover a row
   for *only*, *from*, *until* and *open in the editor*. See
   [Running part of a playbook](#running-part-of-a-playbook).
@@ -58,6 +60,9 @@ to it shows the newest run and runs it again on click.
   [Adding a service](#adding-a-service)) and *Rekey vaults* for the environment
   shown (one `ansible-vault rekey` over every vault in it — one environment at
   a time, because the passphrase is per environment).
+* **Beside the environment tabs**: ✎ renames the environment shown, 🗑 deletes
+  it, ＋ lays out a new one — see
+  [Adding, renaming and deleting an environment](#adding-renaming-and-deleting-an-environment).
 * **The Settings tab** (top left: *Runs | Settings*) shows every setting below
   with its description and where its value comes from (default, User or
   Workspace), with an editor that fits it — text, on/off, a list, or
@@ -194,6 +199,40 @@ inventories/staging/group_vars/<name>/env.yml      ← empty
 * The plan is shown as a list of paths before anything is written, and the name
   must be a plain directory name (letters, digits, dot, dash, underscore) —
   it is an inventory group name at the same time.
+
+## Adding, renaming and deleting an environment
+
+An environment is a directory under `inventories/` with an inventory file in
+it, so all three are operations on that one directory. Each shows what it is
+about to do and waits for a confirmation; none of them runs ansible.
+
+* ***Create Environment Skeleton…*** (＋) asks for a name and what to start
+  from. *Empty* is `inventories/<name>/hosts.ini` and `group_vars/`. *Groups
+  of <environment>* adds that environment's group structure:
+
+  ```
+  inventories/<name>/hosts.ini                   ← its [group] headers and [group:children], no hosts
+  inventories/<name>/group_vars/<group>/env.yml  ← empty, one per group it has
+  ```
+
+  Hosts, `[group:vars]`, env values and vaults are never copied: a copied host
+  list would point the new environment at the old one's machines, and each
+  environment has a vault passphrase of its own. Groups are only read from an
+  INI inventory; with a YAML one the inventory file starts empty.
+* ***Rename Environment…*** (✎) moves the directory and lets what knows the
+  environment by name follow: its keys in `playbookRunner.vaultPasswordFiles`
+  and `playbookRunner.serviceEnvironments` (at every level they are set), the
+  run history and *Re-run last*. The confirmation says when the new name gains
+  or loses the production confirmation, and when a password file found through
+  `vaultPasswordFilePattern` will stop matching. Anything else that spells out
+  the old path — scripts, docs — is not touched.
+* ***Delete Environment…*** (🗑) moves the directory **to the trash**, vaults
+  included, after a dialog that counts what goes and the environment's name
+  typed out. If the trash is unavailable nothing is deleted. Settings that
+  name the environment are left as they are.
+
+Rename and delete are refused while a playbook is running against the
+environment, and delete refuses a symlinked environment directory.
 
 ## Relation to the shell scripts
 
@@ -338,6 +377,7 @@ src/defaults.js     the default of every setting, and their types
 src/paths.js        ${...} expansion, vault password and production rules  ⟵ likewise
 src/tags.js         the tags a playbook offers, read out of the YAML  ⟵ likewise
 src/scaffold.js     the paths a new service is laid out at  ⟵ likewise
+src/environments.js creating, renaming and removing an environment  ⟵ likewise
 src/settings.js     reading the settings out of vscode
 src/history.js      the run history  ⟵ likewise
 src/model.js        the dashboard model and the checks on its messages  ⟵ likewise

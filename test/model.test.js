@@ -188,6 +188,21 @@ describe("dashboard model", () => {
         folder: "/f",
       });
       assert.deepEqual(parseWebviewMessage({ type: "rerunLast" }), { type: "rerunLast" });
+      assert.deepEqual(parseWebviewMessage({ type: "createEnvironment", folder: "/f", name: "x" }), {
+        type: "createEnvironment",
+        folder: "/f",
+      });
+      for (const type of ["renameEnvironment", "deleteEnvironment"]) {
+        // A new name in the message is dropped: the extension asks for it.
+        assert.deepEqual(parseWebviewMessage({ type, folder: "/f", environment: "staging", to: "../x" }), {
+          type,
+          folder: "/f",
+          environment: "staging",
+        });
+        assert.equal(parseWebviewMessage({ type, folder: "/f" }), null);
+        assert.equal(parseWebviewMessage({ type, folder: "/f", environment: 1 }), null);
+      }
+      assert.equal(parseWebviewMessage({ type: "createEnvironment" }), null);
       assert.deepEqual(parseWebviewMessage({ type: "openSettings" }), { type: "openSettings" });
       assert.equal(parseWebviewMessage({ ...vault, action: "delete" }), null);
       assert.equal(parseWebviewMessage({ ...vault, service: undefined }), null);

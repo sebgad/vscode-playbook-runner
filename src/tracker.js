@@ -117,6 +117,22 @@ class RunTracker {
     }
   }
 
+  /**
+   * @param {string} folder @param {string} environment
+   * @returns {boolean} a playbook is running against that environment
+   */
+  isRunning(folder, environment) {
+    return this._history.some(
+      (entry) => entry.status === "running" && entry.folder === folder && entry.environment === environment,
+    );
+  }
+
+  /** @param {string} folder @param {string} from @param {string} to */
+  async renameEnvironment(folder, from, to) {
+    this._history = history.renameEnvironment(this._history, folder, from, to);
+    await this.save();
+  }
+
   async save() {
     await this.context.workspaceState.update(history.HISTORY_KEY, this._history);
     this._onDidChange.fire(undefined);

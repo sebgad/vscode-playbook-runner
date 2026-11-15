@@ -117,6 +117,22 @@ function startRun(history, entry) {
 }
 
 /**
+ * The history after an environment was renamed: its runs follow the name, so
+ * the dashboard keeps showing what last happened to each playbook.
+ *
+ * @param {RunEntry[]} history
+ * @param {string} folder
+ * @param {string} from
+ * @param {string} to
+ * @returns {RunEntry[]}
+ */
+function renameEnvironment(history, folder, from, to) {
+  return history.map((entry) =>
+    entry.folder === folder && entry.environment === from ? { ...entry, environment: to } : entry,
+  );
+}
+
+/**
  * Why a range run counts as failed although ansible may have exited 0, or
  * null. Only an edge the run actually had is held against it.
  *
@@ -234,6 +250,7 @@ module.exports = {
   latestFor,
   parseHistory,
   relativeTime,
+  renameEnvironment,
   settleStale,
   startRun,
 };

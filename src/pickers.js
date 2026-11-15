@@ -10,6 +10,7 @@ const path = require("path");
 const vscode = require("vscode");
 
 const { findEnvironments, findPlaybooks, findVaultGroups } = require("./discovery");
+const { validateEnvironmentName } = require("./environments");
 const { validateServiceName } = require("./scaffold");
 const { productionPattern } = require("./settings");
 const { buildTagChoices, formatTagList, parseTagList } = require("./tags");
@@ -160,6 +161,78 @@ async function pickServiceName(existingNames) {
     },
   });
   return name === undefined ? undefined : name.trim();
+}
+
+/**
+ * The name of a new environment, or the new name of an existing one. A name
+ * that is taken is refused: neither a skeleton nor a rename may land on an
+ * environment that is already there.
+ *
+ * @param {{ title: string, prompt: string, value?: string, taken: string[] }} spec
+ * @returns {Promise<string | undefined>}
+ */
+async function pickEnvironmentName(spec) {
+  const taken = new Set(spec.taken);
+  const name = await vscode.window.showInputBox({
+    title: spec.title,
+    prompt: spec.prompt,
+    value: spec.value,
+    placeHolder: "lab",
+    ignoreFocusOut: true,
+    validateInput: (value) => {
+      const complaint = validateEnvironmentName(value);
+      if (complaint) {
+        return complaint;
+      }
+      const trimmed = value.trim();
+      if (trimmed === spec.value) {
+        return "Enter a different name.";
+      }
+      return taken.has(trimmed) ? `${trimmed} already exists.` : undefined;
+    },
+  });
+  return name === undefined ? undefined : name.trim();
+}
+
+/**
+ * What a new environment is modelled on: nothing, or the groups of an
+ * existing one. Not asked when there is no environment to copy from.
+ *
+ * @param {import("./discovery").Environment[]} environments
+ * @returns {Promise<{ from: string | null } | undefined>} undefined when dismissed
+ */
+async function pickEnvironmentSource(environments) {
+  if (!environments.length) {
+    return { from: null };
+  }
+  const picked = await vscode.window.showQuickPick(
+    [
+      ...environments.map((environment) => ({
+        label: `$(copy) Groups of ${environment.name}`,
+        description: "group names and empty env files — no hosts, no values, no vaults",
+        from: /** @type {string | null} */ (environment.name),
+      })),
+      { label: "$(file) Empty", description: "an empty inventory and an empty group_vars/", from: null },
+    ],
+    { title: "New environment: start from", ignoreFocusOut: true },
+  );
+  return picked && { from: picked.from };
+}
+
+/**
+ * The last question before an environment is removed: its name, typed out.
+ *
+ * @param {string} name
+ * @returns {Promise<boolean>}
+ */
+async function confirmByName(name) {
+  const typed = await vscode.window.showInputBox({
+    title: `Delete environment ${name}`,
+    prompt: `Type ${name} to confirm`,
+    ignoreFocusOut: true,
+    validateInput: (value) => (value === name ? undefined : `Type ${name} exactly, or press Escape to cancel.`),
+  });
+  return typed === name;
 }
 
 /**
@@ -509,9 +582,12 @@ async function confirmRekey(environment, count, passwordFile) {
 }
 
 module.exports = {
+  confirmByName,
   confirmProduction,
   confirmRekey,
   pickEnvironment,
+  pickEnvironmentName,
+  pickEnvironmentSource,
   pickFolder,
   pickPlaybook,
   pickRunOptions,

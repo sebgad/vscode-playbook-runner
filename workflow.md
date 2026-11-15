@@ -459,6 +459,26 @@ tree without a reload.
     repository. A `productionPattern` that does not compile is refused rather
     than saved: compiled, it would mean "no environment is production" and
     turn the confirmation off without a word.
+21. ✅ environments can be created, renamed and deleted:
+    `src/environments.js` + `playbookRunner.createEnvironment`,
+    `renameEnvironment`, `deleteEnvironment`. Step 11's "the command never
+    creates an inventory" still holds for the *service* skeleton; creating
+    one is now a command of its own. Each is a plan first
+    (`planEnvironment`, `planRename`, `planDelete`) and the confirmation
+    shows the plan. A new environment modelled on another gets its group
+    names (`inventoryGroupSkeleton`) and empty env files -- never hosts,
+    because a copied host list deploys to the other environment's machines,
+    and never vaults, because the passphrase is per environment. A rename
+    is one `fs.renameSync`; the names that would dangle afterwards follow
+    it (`renameInSetting` for `vaultPasswordFiles` and
+    `serviceEnvironments`, `history.renameEnvironment`, the last run), and
+    the two things that silently change with a name -- the production
+    confirmation and a pattern-resolved password file -- are spelled out
+    in the dialog. A delete is the one step not in a `vscode`-free module:
+    `vscode.workspace.fs.delete(..., { useTrash: true })`, because only the
+    editor can reach the trash, and there is deliberately no fallback to a
+    permanent delete. The webview only says *which* environment; a new
+    name is always asked for by the extension.
 
 ## 10. Verification
 

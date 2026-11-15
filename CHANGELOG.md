@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+* **Environments can be created, renamed and deleted** from the dashboard
+  (＋, ✎ and 🗑 beside the environment tabs) and the palette. A new one is
+  empty or takes the group structure of an existing one — group names and
+  empty env files, never hosts, values or vaults. A rename carries
+  `vaultPasswordFiles`, `serviceEnvironments`, the run history and the last
+  run along and says what the new name changes about the production
+  confirmation and the vault password file. A delete moves the directory to
+  the trash after its name has been typed.
+
+* Tag chips say more at a glance: a tag in `--tags` is filled, bold and
+  ticked, and a tag whose tasks run without being selected — a
+  `playbookRunner.setupTags` tag (before a task range) or ansible's `always` —
+  is yellow, with the reason in its tooltip.
+
+* Choosing another service clears the run bar's `--tags`, so tags picked for
+  one service no longer carry over to the next.
+
 * The dashboard's service list leads each service with what happened to it —
   ✓ passed, ✗ failed, a spinner while running, ⊘ cancelled, ○ never run, and a
   variables icon for services without playbooks — instead of a coloured dot,

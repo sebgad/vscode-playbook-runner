@@ -92,6 +92,7 @@ function existingServiceNames(root, settings) {
  * @property {string} path      absolute
  * @property {string} relative  relative to the workspace folder, for messages
  * @property {boolean} exists   at the time the plan was made
+ * @property {string} [content] what a file is created with; empty when absent
  */
 
 /**
@@ -212,7 +213,7 @@ function isErrno(err, code) {
  * is: running this against a service that is only missing from one environment
  * fills the gap without touching the environments that have it.
  *
- * @param {SkeletonPlan} plan
+ * @param {{ entries: SkeletonEntry[] }} plan
  * @returns {{ created: SkeletonEntry[], skipped: SkeletonEntry[] }}
  */
 function createSkeleton(plan) {
@@ -232,7 +233,7 @@ function createSkeleton(plan) {
 
     try {
       fs.mkdirSync(path.dirname(entry.path), { recursive: true });
-      fs.writeFileSync(entry.path, "", { flag: "wx" });
+      fs.writeFileSync(entry.path, entry.content || "", { flag: "wx" });
       created.push(entry);
     } catch (err) {
       if (!isErrno(err, "EEXIST")) {

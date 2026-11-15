@@ -785,6 +785,45 @@
           ),
         ),
       ),
+      h(
+        "div",
+        { class: "toolbar", "aria-label": "Environments" },
+        h(
+          "button",
+          {
+            class: "icon-button",
+            title: `Rename the environment ${environment.name}…`,
+            "aria-label": `Rename the environment ${environment.name}`,
+            "data-key": "rename-environment",
+            onclick: () =>
+              vscode.postMessage({ type: "renameEnvironment", folder: folder.path, environment: environment.name }),
+          },
+          icon("edit"),
+        ),
+        h(
+          "button",
+          {
+            class: "icon-button",
+            title: `Delete the environment ${environment.name}… (moved to the trash)`,
+            "aria-label": `Delete the environment ${environment.name}`,
+            "data-key": "delete-environment",
+            onclick: () =>
+              vscode.postMessage({ type: "deleteEnvironment", folder: folder.path, environment: environment.name }),
+          },
+          icon("trash"),
+        ),
+        h(
+          "button",
+          {
+            class: "icon-button",
+            title: "Lay out a new environment: an inventory and group_vars/, optionally with the groups of an existing one",
+            "aria-label": "New environment",
+            "data-key": "new-environment",
+            onclick: () => vscode.postMessage({ type: "createEnvironment", folder: folder.path }),
+          },
+          icon("add"),
+        ),
+      ),
     );
   }
 
@@ -851,6 +890,11 @@
                     "data-key": `service:${service.name}`,
                     "data-nav-item": "",
                     onclick: () => {
+                      // Tags belong to the service they were picked in;
+                      // another service's playbooks rarely have them.
+                      if (!current || service.name !== current.name) {
+                        state.opts.tags = "";
+                      }
                       state.service = service.name;
                       changed();
                     },
@@ -986,14 +1030,14 @@
    * The playbook's tags in run order: ▶ runs only that tag, a click on the
    * chip adds it to the run bar's --tags.
    *
-   * @param {any} playbook
+   * @param {any} folder @param {any} playbook
    */
-  function tagsLine(playbook) {
+  function tagsLine(folder, playbook) {
     const tags = playbookTags.get(playbook.file) || [];
     if (!tags.length) {
       return null;
     }
-    const activeTags = new Set(state.opts.tags.split(",").map((t) => t.trim()).filter(Boolean));
+    const marks = tagMarks(folder);
     return h(
       "div",
       { class: "tags-line" },
@@ -1012,7 +1056,7 @@
             },
             icon("play"),
           ),
-          tagChip(playbook, tag.name, activeTags),
+          tagChip(playbook, tag.name, marks),
         ),
       ),
     );
@@ -1029,20 +1073,20 @@
       return h(
         "div",
         { class: "card-body" },
-        tagsLine(playbook),
+        tagsLine(folder, playbook),
         h("p", { class: "note" }, "No named tasks found by the scanner. ▶ and the tags above still run it."),
       );
     }
     const selected = state.selected === playbook.file;
     const range = selected ? rangeIndices(tasks) : { from: -1, until: -1, active: false };
-    const setup = new Set(setupTags[folder.path] || []);
-    const activeTags = new Set(state.opts.tags.split(",").map((t) => t.trim()).filter(Boolean));
+    const marks = tagMarks(folder);
+    const setup = marks.setup;
     let index = -1;
 
     return h(
       "div",
       { class: "card-body", role: "tree", "aria-label": `Tasks of ${playbook.name}`, "data-nav": `tasks:${playbook.file}` },
-      tagsLine(playbook),
+      tagsLine(folder, playbook),
       outline.strategy
         ? h(
             "p",
@@ -1065,7 +1109,7 @@
           { class: "play-head" },
           play.name,
           h("span", { class: "hosts" }, play.hosts),
-          [...common].map((tag) => tagChip(playbook, tag, activeTags)),
+          [...common].map((tag) => tagChip(playbook, tag, marks)),
         ),
         ...play.tasks.map((/** @type {any} */ task) => {
           index += 1;
@@ -1089,7 +1133,7 @@
             isSetup,
             skipped,
             marker,
-            activeTags,
+            marks,
             canRange: !outline.strategy,
             ownTags: task.tags.filter((/** @type {string} */ t) => !common.has(t)),
           });
@@ -1103,16 +1147,42 @@
   }
 
   /**
-   * A tag that adds itself to --tags when clicked, or removes itself again.
+   * What a tag chip is coloured by: the tags in the run bar's --tags, and the
+   * folder's setup tags.
    *
-   * @param {any} playbook @param {string} tag @param {Set<string>} activeTags
+   * @typedef {{ active: Set<string>, setup: Set<string> }} TagMarks
+   * @param {any} folder
+   * @returns {TagMarks}
    */
-  function tagChip(playbook, tag, activeTags) {
+  function tagMarks(folder) {
+    return {
+      active: new Set(state.opts.tags.split(",").map((t) => t.trim()).filter(Boolean)),
+      setup: new Set(setupTags[folder.path] || []),
+    };
+  }
+
+  /**
+   * A tag that adds itself to --tags when clicked, or removes itself again.
+   * Selected tags are filled and ticked; tags that run without being selected
+   * (a setup tag before a task range, ansible's own `always`) are yellow.
+   *
+   * @param {any} playbook @param {string} tag @param {TagMarks} marks
+   */
+  function tagChip(playbook, tag, marks) {
+    const on = marks.active.has(tag);
+    const always =
+      tag === "always"
+        ? "Ansible runs tasks tagged always on every run, whatever --tags says."
+        : marks.setup.has(tag)
+          ? "Setup tag: its tasks always run before a task range. A plain --tags run only includes it when it is selected."
+          : "";
+    const action = on ? `Remove ${tag} from --tags` : `Add ${tag} to --tags`;
     return h(
       "button",
       {
-        class: `chip ${activeTags.has(tag) ? "on" : ""}`,
-        title: activeTags.has(tag) ? `Remove ${tag} from --tags` : `Add ${tag} to --tags`,
+        class: `chip ${on ? "on" : ""} ${always ? "always" : ""}`,
+        title: always ? `${always}\n${action}` : action,
+        "aria-pressed": String(on),
         onclick: (/** @type {Event} */ e) => {
           e.stopPropagation();
           select(playbook.file);
@@ -1125,7 +1195,7 @@
 
   /**
    * @param {any} folder @param {any} playbook @param {any[]} tasks @param {any} task @param {number} at
-   * @param {{ inRange: boolean, isSetup: boolean, skipped: boolean, marker: string, activeTags: Set<string>, canRange: boolean, ownTags: string[] }} view
+   * @param {{ inRange: boolean, isSetup: boolean, skipped: boolean, marker: string, marks: TagMarks, canRange: boolean, ownTags: string[] }} view
    */
   function taskRow(folder, playbook, tasks, task, at, view) {
     const roleSplit = task.role ? task.name.slice(task.role.length + 3) : task.name;
@@ -1152,7 +1222,7 @@
         { class: "task-name" },
         task.role ? h("span", { class: "role" }, `${task.role} :`) : null,
         h("span", null, roleSplit),
-        view.ownTags.map((tag) => tagChip(playbook, tag, view.activeTags)),
+        view.ownTags.map((tag) => tagChip(playbook, tag, view.marks)),
       ),
       h(
         "span",
@@ -1413,6 +1483,12 @@
               },
               icon("settings-gear"),
               "Open Settings",
+            ),
+            h(
+              "button",
+              { class: "icon-button", onclick: () => vscode.postMessage({ type: "createEnvironment", folder: folder.path }) },
+              icon("add"),
+              h("span", { class: "label" }, "New environment…"),
             ),
             h(
               "button",

@@ -32,6 +32,8 @@ const {
 } = require("./src/tags");
 const runner = require("./src/runner");
 const pickers = require("./src/pickers");
+const environments = require("./src/environments");
+const { isProductionName } = require("./src/paths");
 const scaffold = require("./src/scaffold");
 const { DashboardPanel, VIEW_TYPE } = require("./src/dashboard");
 const { relativeTime } = require("./src/history");
@@ -487,6 +489,284 @@ async function createServiceSkeleton(argument, refresh) {
 }
 
 /**
+ * Lay out a new environment: inventories/<name>/ with an inventory file and
+ * group_vars/. Modelled on an existing environment it also gets that one's
+ * groups -- the names in the inventory, a group_vars/<group>/ with an empty
+ * env file each -- and never its hosts, its values or its vaults.
+ *
+ * @param {unknown} argument
+ * @param {() => void} refresh
+ */
+async function createEnvironmentSkeleton(argument, refresh) {
+  const node = asCommandNode(argument);
+  const folder = node.folder || (await pickers.pickFolder());
+  if (!folder) {
+    return;
+  }
+  const settings = readSettings(folder);
+  const root = folder.uri.fsPath;
+  const existing = findEnvironments(root, settings);
+
+  const name = await pickers.pickEnvironmentName({
+    title: "New environment skeleton",
+    prompt: `Directory name under ${settings.inventoriesDir}/`,
+    taken: existing.map((item) => item.name),
+  });
+  if (!name) {
+    return;
+  }
+  const source = await pickers.pickEnvironmentSource(existing);
+  if (!source) {
+    return;
+  }
+
+  /** @type {import("./src/environments").EnvironmentPlan} */
+  let plan;
+  try {
+    plan = environments.planEnvironment(root, name, settings, source);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Playbook Runner: ${messageOf(err)}`);
+    return;
+  }
+
+  const missing = plan.entries.filter((entry) => !entry.exists);
+  const detail = missing
+    .map((entry) => (entry.type === "directory" ? `${entry.relative}/` : entry.relative))
+    .join("\n");
+  const notes = [];
+  if (plan.from) {
+    notes.push(
+      plan.groupsCopied
+        ? `${settings.inventoryFile} gets the group names of ${plan.from} and no hosts; the env files are empty and no vault is copied.`
+        : `${settings.inventoryFile} starts empty (the groups of ${plan.from} could not be read from its inventory); the env files are empty and no vault is copied.`,
+    );
+  }
+  if (isProductionName(settings, plan.name)) {
+    notes.push(`${plan.name} matches playbookRunner.productionPattern: runs against it will ask for confirmation.`);
+  }
+  const note = notes.map((line) => `\n\n${line}`).join("");
+  const answer = await vscode.window.showInformationMessage(
+    `Create the environment ${plan.name}?`,
+    { modal: true, detail: `${detail}${note}` },
+    "Create",
+  );
+  if (answer !== "Create") {
+    return;
+  }
+
+  try {
+    const { created } = scaffold.createSkeleton(plan);
+    refresh();
+    vscode.window.showInformationMessage(
+      `Playbook Runner: created ${created.length} ${created.length === 1 ? "entry" : "entries"} for ${plan.name}. Add its hosts to ${settings.inventoryFile}, then create its vaults.`,
+    );
+  } catch (err) {
+    vscode.window.showErrorMessage(
+      `Playbook Runner: could not create the environment ${plan.name}: ${messageOf(err)}`,
+    );
+  }
+}
+
+/**
+ * Every level a setting is set at, with the environment renamed where it is
+ * mentioned. vaultPasswordFiles is keyed by environment and
+ * serviceEnvironments lists them; left alone, both would keep pointing at a
+ * name that no longer exists.
+ *
+ * @param {vscode.WorkspaceFolder} folder
+ * @param {string} from
+ * @param {string} to
+ * @returns {Promise<string[]>} the settings that were updated
+ */
+async function renameEnvironmentInSettings(folder, from, to) {
+  const config = vscode.workspace.getConfiguration("playbookRunner", folder.uri);
+  /** @type {string[]} */
+  const updated = [];
+  for (const key of ["vaultPasswordFiles", "serviceEnvironments"]) {
+    const inspected = config.inspect(key);
+    if (!inspected) {
+      continue;
+    }
+    /** @type {[unknown, vscode.ConfigurationTarget][]} */
+    const levels = [
+      [inspected.globalValue, vscode.ConfigurationTarget.Global],
+      [inspected.workspaceValue, vscode.ConfigurationTarget.Workspace],
+      [inspected.workspaceFolderValue, vscode.ConfigurationTarget.WorkspaceFolder],
+    ];
+    for (const [value, target] of levels) {
+      const renamed = environments.renameInSetting(value, from, to);
+      if (renamed !== undefined) {
+        await config.update(key, renamed, target);
+        if (!updated.includes(key)) {
+          updated.push(key);
+        }
+      }
+    }
+  }
+  return updated;
+}
+
+/**
+ * Rename an environment: move its directory, then let everything that knows
+ * it by name follow -- the two settings that name environments, the run
+ * history and the last run.
+ *
+ * @param {vscode.ExtensionContext} context
+ * @param {RunTracker} tracker
+ * @param {unknown} argument
+ * @param {() => void} refresh
+ */
+async function renameEnvironmentCommand(context, tracker, argument, refresh) {
+  const resolved = await resolveContext(asCommandNode(argument));
+  if (!resolved) {
+    return;
+  }
+  const { folder, settings, environment } = resolved;
+  const root = folder.uri.fsPath;
+  if (tracker.isRunning(root, environment.name)) {
+    vscode.window.showWarningMessage(
+      `Playbook Runner: a playbook is running against ${environment.name}; rename it when the run has finished.`,
+    );
+    return;
+  }
+
+  const name = await pickers.pickEnvironmentName({
+    title: `Rename environment ${environment.name}`,
+    prompt: `New directory name under ${settings.inventoriesDir}/`,
+    value: environment.name,
+    taken: findEnvironments(root, settings).map((item) => item.name),
+  });
+  if (!name) {
+    return;
+  }
+
+  /** @type {import("./src/environments").RenamePlan} */
+  let plan;
+  try {
+    plan = environments.planRename(root, environment.name, name, settings);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Playbook Runner: ${messageOf(err)}`);
+    return;
+  }
+
+  const detail = [
+    `${plan.relativeFrom}/ → ${plan.relativeTo}/`,
+    "Settings that name the environment, the run history and the last run follow the new name. Anything else that spells out the old path — scripts, docs, CI — does not.",
+    ...plan.notes,
+  ].join("\n\n");
+  const answer = await vscode.window.showWarningMessage(
+    `Rename the environment ${plan.from} to ${plan.to}?`,
+    { modal: true, detail },
+    "Rename",
+  );
+  if (answer !== "Rename") {
+    return;
+  }
+
+  try {
+    environments.renameEnvironment(plan);
+  } catch (err) {
+    vscode.window.showErrorMessage(
+      `Playbook Runner: could not rename ${plan.from}: ${messageOf(err)}`,
+    );
+    return;
+  }
+
+  // The directory has moved; what follows only keeps names in step, so a
+  // failure here is reported and the rest still happens.
+  /** @type {string[]} */
+  let updated = [];
+  try {
+    updated = await renameEnvironmentInSettings(folder, plan.from, plan.to);
+  } catch (err) {
+    vscode.window.showWarningMessage(
+      `Playbook Runner: ${plan.from} was renamed, but the settings naming it could not be updated: ${messageOf(err)}`,
+    );
+  }
+  await tracker.renameEnvironment(root, plan.from, plan.to);
+  const last = parseLastRun(context.workspaceState.get(LAST_RUN_KEY));
+  if (last && last.folderPath === root && last.environmentName === plan.from) {
+    await context.workspaceState.update(LAST_RUN_KEY, { ...last, environmentName: plan.to });
+  }
+  refresh();
+  vscode.window.showInformationMessage(
+    `Playbook Runner: renamed ${plan.from} to ${plan.to}${
+      updated.length ? ` and updated ${updated.map((key) => `playbookRunner.${key}`).join(", ")}` : ""
+    }.`,
+  );
+}
+
+/**
+ * Remove an environment, by moving its directory to the trash -- its vaults
+ * go with it, and the trash is what makes a wrong click recoverable. Asked
+ * twice: a dialog saying what goes, then the name typed out.
+ *
+ * @param {RunTracker} tracker
+ * @param {unknown} argument
+ * @param {() => void} refresh
+ */
+async function deleteEnvironmentCommand(tracker, argument, refresh) {
+  const resolved = await resolveContext(asCommandNode(argument));
+  if (!resolved) {
+    return;
+  }
+  const { folder, settings, environment } = resolved;
+  const root = folder.uri.fsPath;
+  if (tracker.isRunning(root, environment.name)) {
+    vscode.window.showWarningMessage(
+      `Playbook Runner: a playbook is running against ${environment.name}; delete it when the run has finished.`,
+    );
+    return;
+  }
+
+  /** @type {import("./src/environments").DeletePlan} */
+  let plan;
+  try {
+    plan = environments.planDelete(root, environment.name, settings);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Playbook Runner: ${messageOf(err)}`);
+    return;
+  }
+  if (plan.isLink) {
+    vscode.window.showErrorMessage(
+      `Playbook Runner: ${plan.relative} is a symbolic link; remove it by hand, so it is clear whether the link or what it points at should go.`,
+    );
+    return;
+  }
+
+  const detail = [
+    `${plan.relative}/ is moved to the trash: ${plan.files} file${plan.files === 1 ? "" : "s"}, ${
+      plan.vaults
+        ? `${plan.vaults} vault${plan.vaults === 1 ? "" : "s"} among them`
+        : "no vault among them"
+    }.`,
+    "Playbooks and roles are not touched. Changes in it that are not committed exist only in the trash afterwards.",
+    plan.isProduction ? `${plan.name} is treated as production.` : "",
+    plan.isLast ? "It is the only environment: nothing can be run until there is another." : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const answer = await vscode.window.showWarningMessage(
+    `Delete the environment ${plan.name}?`,
+    { modal: true, detail },
+    "Delete…",
+  );
+  if (answer !== "Delete…" || !(await pickers.confirmByName(plan.name))) {
+    return;
+  }
+
+  try {
+    await vscode.workspace.fs.delete(vscode.Uri.file(plan.dir), { recursive: true, useTrash: true });
+    refresh();
+    vscode.window.showInformationMessage(`Playbook Runner: moved ${plan.relative} to the trash.`);
+  } catch (err) {
+    vscode.window.showErrorMessage(
+      `Playbook Runner: could not move ${plan.relative} to the trash, and nothing was deleted: ${messageOf(err)}`,
+    );
+  }
+}
+
+/**
  * The file watchers that keep the dashboard current.
  *
  * They are scoped to each folder's configured playbooks/ and inventories/
@@ -617,6 +897,9 @@ function activate(context) {
       vault: (node, action) => vaultCommand(node, action),
       rekey: (node) => rekeyVaultsCommand(node),
       createService: (node) => createServiceSkeleton(node, refresh),
+      createEnvironment: (node) => createEnvironmentSkeleton(node, refresh),
+      renameEnvironment: (node) => renameEnvironmentCommand(context, tracker, node, refresh),
+      deleteEnvironment: (node) => deleteEnvironmentCommand(tracker, node, refresh),
       rerunLast: () => rerunLast(context, tracker),
     },
   };
@@ -656,6 +939,11 @@ function activate(context) {
     register("playbookRunner.createVault", (node) => vaultCommand(node, "create")),
     register("playbookRunner.rekeyVaults", (node) => rekeyVaultsCommand(node)),
     register("playbookRunner.createService", (node) => createServiceSkeleton(node, refresh)),
+    register("playbookRunner.createEnvironment", (node) => createEnvironmentSkeleton(node, refresh)),
+    register("playbookRunner.renameEnvironment", (node) =>
+      renameEnvironmentCommand(context, tracker, node, refresh),
+    ),
+    register("playbookRunner.deleteEnvironment", (node) => deleteEnvironmentCommand(tracker, node, refresh)),
 
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       watchers.rebuild();

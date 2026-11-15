@@ -108,6 +108,8 @@ function buildDashboardModel(folders, readSettingsFor, history) {
  *   | { type: "vault", folder: string, environment: string, service: string, action: "edit" | "create" }
  *   | { type: "rekey", folder: string, environment: string }
  *   | { type: "createService", folder: string }
+ *   | { type: "createEnvironment", folder: string }
+ *   | { type: "renameEnvironment" | "deleteEnvironment", folder: string, environment: string }
  *   | { type: "rerunLast" }
  *   | { type: "openSettings" }
  *   | { type: "setSetting", key: string, value: unknown, target: "workspace" | "user" }
@@ -176,6 +178,14 @@ function parseWebviewMessage(value) {
         : null;
     case "createService":
       return allStrings(raw, ["folder"]) ? { type: "createService", folder: String(raw.folder) } : null;
+    case "createEnvironment":
+      return allStrings(raw, ["folder"]) ? { type: "createEnvironment", folder: String(raw.folder) } : null;
+    case "renameEnvironment":
+    case "deleteEnvironment":
+      // Only which environment; the new name is asked for by the extension.
+      return allStrings(raw, ["folder", "environment"])
+        ? { type: raw.type, folder: String(raw.folder), environment: String(raw.environment) }
+        : null;
     case "outline":
       return allStrings(raw, ["folder", "playbook"])
         ? { type: "outline", folder: String(raw.folder), playbook: String(raw.playbook) }

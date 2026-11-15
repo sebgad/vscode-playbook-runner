@@ -95,6 +95,24 @@
         "icon": "$(new-folder)"
       },
       {
+        "command": "playbookRunner.createEnvironment",
+        "title": "Create Environment Skeleton…",
+        "category": "Playbook Runner",
+        "icon": "$(add)"
+      },
+      {
+        "command": "playbookRunner.renameEnvironment",
+        "title": "Rename Environment…",
+        "category": "Playbook Runner",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "playbookRunner.deleteEnvironment",
+        "title": "Delete Environment…",
+        "category": "Playbook Runner",
+        "icon": "$(trash)"
+      },
+      {
         "command": "playbookRunner.openDashboard",
         "title": "Open Dashboard",
         "category": "Playbook Runner",

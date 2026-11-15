@@ -470,9 +470,23 @@ input[type="text"]::placeholder {
   border-color: var(--vscode-focusBorder);
 }
 
+/* Runs without being selected: a setup tag, or ansible's `always`. */
+.chip.always {
+  border-color: var(--vscode-charts-yellow);
+  background: color-mix(in srgb, var(--vscode-charts-yellow) 18%, transparent);
+  color: var(--vscode-foreground);
+}
+
+/* In --tags. After .always, so a selected setup tag is filled and keeps its
+   yellow border. */
 .chip.on {
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
+  font-weight: 600;
+}
+
+.chip.on::before {
+  content: "✓ ";
 }
 
 .actions {
