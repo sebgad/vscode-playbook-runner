@@ -1,124 +1,113 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
+
+The first release published on the Visual Studio Marketplace and Open VSX
+(as a preview). It replaces the sidebar with a dashboard and drops what only
+made sense inside the repository it was written for.
+
+### Breaking
+
+* **Renamed from *Homelab* to *Playbook Runner*.** The extension ID is now
+  `sebgad.playbook-runner`, so a `.vsix` of the old one has to be uninstalled
+  by hand, and the last run and remembered run options — kept per extension
+  ID — start empty once. Settings are `playbookRunner.*` and commands
+  `playbookRunner.<command>`, with no fallback: `homelab.*` settings and
+  keybindings, and the 0.1 names (`homelabTasks.*`), are ignored until
+  renamed.
+* **The sidebar is gone; the dashboard is the whole UI.** The commands only
+  the tree used (*Run Playbook with This Tag*, *Open Playbook*, *Open Env
+  File*, *Refresh*) are removed, and playbooks no longer run as VS Code tasks.
+  The extension activates on startup, for its status bar item.
+* `playbookRunner.setupTags` defaults to `[]` instead of
+  `["podman-user-setup"]`, a tag only one repository had. If your task ranges
+  relied on it, set it in the workspace's `.vscode/settings.json`:
+  `"playbookRunner.setupTags": ["podman-user-setup"]`.
+
+### Dashboard
+
+* *Open Dashboard*, or the `$(run-all) Playbook Runner` status bar item
+  (`· N running` while playbooks run), opens an editor tab: environments as
+  tabs, services with their last run, playbooks that expand into their tags,
+  plays and tasks, and a run bar that shows the exact command line before
+  *Run*. A second status bar item shows the newest run and re-runs it on
+  click.
+* The service list leads each service with what happened to it — ✓ passed,
+  ✗ failed, a spinner while running, ⊘ cancelled, ○ never run, and a
+  variables icon for services without playbooks — and marks the selected one
+  with an accent bar. The runner figure follows the theme, in the page and on
+  the editor tab.
+* Tag chips say more at a glance: a tag in `--tags` is filled, bold and
+  ticked, and a tag whose tasks run without being selected — a
+  `playbookRunner.setupTags` tag before a task range, or ansible's `always` —
+  is yellow, with the reason in its tooltip. Choosing another service clears
+  `--tags`, so tags picked for one service no longer carry over to the next.
+* **Settings tab**: every `playbookRunner.*` setting with its description,
+  where its value comes from, an editor that fits its type, and *Reset*.
+  Saves to the workspace's `.vscode/settings.json` (or *Move to User
+  settings*); the four machine settings — the ansible commands and the vault
+  password files — always go to User settings. Values are checked before they
+  are saved; a `productionPattern` that is not a valid regular expression is
+  refused instead of silently switching the production confirmation off.
+
+### Running playbooks
+
+* **Task ranges**: run a playbook *from* a task, *until* a task, or *only*
+  one task — from the dashboard or from *Run Playbook with Options…*. A
+  strategy plugin shipped with the extension does it; tasks tagged with one
+  of `playbookRunner.setupTags` still run before the start. A range whose
+  task is not in the playbook, or whose end comes before its start, is
+  refused before anything runs, as is one on a playbook with `serial:` or on
+  an ansible-core other than 2.22.
+* `--step` is a run option, and *Run Playbook with Options…* is grouped into
+  *Scope* and *Output* and stays open when focus moves elsewhere.
+* **Playbooks run in a reused *Playbook Runner* terminal.** The Python
+  Environments extension typed `source .venv/bin/activate.fish` into new
+  task terminals — into the vault password prompt, crashing the run —
+  whenever it failed to recognise them in time. Every terminal the extension
+  opens is now created hidden and then shown, which that extension leaves
+  alone. Exit codes reach the run history through shell integration; Ctrl+C
+  stops a run. Requires VS Code 1.93.
+* Roles referenced by a path relative to the playbook
+  (`../../roles/unattended-upgrades`) are followed, so their tags appear in
+  the tag list.
+
+### Services and environments
 
 * **Get started from an empty folder**: the dashboard's "No Ansible
   environments found" page has a *Get started…* button (also *Playbook
   Runner: Get Started…*). It asks for a first environment and service and,
   after one confirmation listing only what is missing, creates `ansible.cfg`
   (left alone if present), `roles/`, a starter playbook, an inventory and an
-  empty `group_vars/<service>/env.yml`. The inventory contains `localhost`
-  (`ansible_connection=local`) in the service's group so the starter playbook
-  runs immediately instead of matching no hosts. Refused when an environment
-  already exists.
-
+  empty `group_vars/<service>/env.yml`. The inventory puts `localhost`
+  (`ansible_connection=local`) in the service's group, so the starter
+  playbook runs straight away instead of matching no hosts. Refused once an
+  environment exists.
 * **New service… offers a starter playbook**: after the name it asks *Empty
   folder* or *With a starter playbook* (`hosts: <service>`, one `ping` task
   tagged `hello`). It still never adds hosts; if the group has none in an INI
-  inventory the confirmation says so. An existing playbook is never
+  inventory, the confirmation says so. An existing playbook is never
   overwritten.
-
-* **Ready for the Marketplace and Open VSX**: MIT licensed, listed as a
-  preview, and the README now starts with the requirements and the repository
-  layout the extension expects; building from source moved to
-  `CONTRIBUTING.md`.
-
-* **Breaking:** `playbookRunner.setupTags` now defaults to `[]` instead of
-  `["podman-user-setup"]`, a tag only one repository had. If your task ranges
-  relied on it, set it in the workspace's `.vscode/settings.json`:
-  `"playbookRunner.setupTags": ["podman-user-setup"]`.
-
 * **Environments can be created, renamed and deleted** from the dashboard
   (＋, ✎ and 🗑 beside the environment tabs) and the palette. A new one is
   empty or takes the group structure of an existing one — group names and
   empty env files, never hosts, values or vaults. A rename carries
   `vaultPasswordFiles`, `serviceEnvironments`, the run history and the last
-  run along and says what the new name changes about the production
+  run along, and says what the new name changes about the production
   confirmation and the vault password file. A delete moves the directory to
   the trash after its name has been typed.
+* New setting `playbookRunner.serviceEnvironments`: the environments *Create
+  Service Skeleton…* creates `group_vars/<name>/` in. Empty (the default)
+  means every environment; a listed name that is not an environment is
+  skipped and named in the confirmation, never created.
 
-* Tag chips say more at a glance: a tag in `--tags` is filled, bold and
-  ticked, and a tag whose tasks run without being selected — a
-  `playbookRunner.setupTags` tag (before a task range) or ansible's `always` —
-  is yellow, with the reason in its tooltip.
+### Publishing
 
-* Choosing another service clears the run bar's `--tags`, so tags picked for
-  one service no longer carry over to the next.
-
-* The dashboard's service list leads each service with what happened to it —
-  ✓ passed, ✗ failed, a spinner while running, ⊘ cancelled, ○ never run, and a
-  variables icon for services without playbooks — instead of a coloured dot,
-  and marks the selected one with an accent bar. The runner figure heads the
-  dashboard in the theme's text colour, and the editor tab has a light and a
-  dark version of it, so it no longer disappears in dark themes.
-
-* **Settings tab** in the dashboard: every `playbookRunner.*` setting with its
-  description, where its value comes from, an editor that fits its type, and
-  *Reset*. Saves to the workspace's `.vscode/settings.json` (or *Move to User
-  settings*); the four machine settings — the ansible commands and the vault
-  password files — always go to User settings. Values are checked before
-  they are saved; a `productionPattern` that is not a valid regular expression
-  is refused instead of silently switching the production confirmation off.
-
-* **The sidebar is gone; the dashboard is the whole UI.** A
-  `$(run-all) Playbook Runner` status bar item opens it (`· N running` while
-  playbooks run). Everything the tree did is in the dashboard: ▶ per playbook,
-  ▷ per tag, Edit/Create vault per service, Rekey vaults, New service…,
-  Re-run last, and services that only have `group_vars`. The commands only the
-  tree used (*Run Playbook with This Tag*, *Open Playbook*, *Open Env File*, *Refresh*)
-  are removed. The extension now activates on startup, for the status bar item.
-
-* **Playbooks run in a reused *Playbook Runner* terminal** instead of a new
-  task terminal per run. The Python Environments extension typed
-  `source .venv/bin/activate.fish` into new task terminals — into the vault
-  password prompt, crashing the run — whenever it failed to recognise them as
-  tasks in time. Every terminal the extension opens (runner and vault) is now
-  created hidden and then shown, which that extension leaves alone. Exit codes
-  still reach the run history through shell integration; *Terminate Task* is
-  replaced by Ctrl+C. Requires VS Code 1.93.
-
-* **Dashboard:** *Open Dashboard* opens an editor tab with environments,
-  services and their last run, playbooks that expand into plays and tasks, and
-  a run bar showing the exact command line before *Run*.
-* **Task ranges:** run a playbook *from* a task, *until* a task, or *only* one
-  task — from the dashboard or from ⚙ *Run Options*. A strategy plugin shipped
-  with the extension does it; tasks tagged with the new
-  `playbookRunner.setupTags` (default `podman-user-setup`) still run before
-  the start. A range whose task is not in the playbook, or whose end comes
-  before its start, is refused before anything runs, as is one on a playbook
-  with `serial:` or on an ansible-core other than 2.22.
-* `--step` is a run option.
-* Playbook rows show their last run (`✓ 3 min ago`, spinner while running),
-  the activity bar icon counts running playbooks, and a status bar item shows
-  the newest run and re-runs it on click.
-* An empty tree shows a welcome view with *Open Settings* instead of a
-  "nothing found" row.
-* *Run Options* is grouped into *Scope* and *Output* and stays open when focus
-  moves elsewhere.
-* Roles referenced by a path relative to the playbook
-  (`../../roles/unattended-upgrades`) are now followed, so their tags appear
-  in the tag list.
-
-* Renamed from *Homelab* (`homelab-tasks`) to *Playbook Runner*
-  (`playbook-runner`): the activity bar, the command palette category, the task
-  source and the prefix of every notification. The extension ID is now
-  `sebgad.playbook-runner`, so a `.vsix` install of the old one has to be
-  uninstalled by hand, and the last run and remembered run options — kept per
-  extension ID — start empty once.
-* **Breaking:** every identifier moved with it, with no fallback. Settings are
-  `playbookRunner.*` instead of `homelab.*`, commands
-  `playbookRunner.<command>`, the view `playbookRunnerExplorer` and the task
-  type `playbook-runner`. Old `homelab.*` settings, keybindings and
-  `"type": "homelab"` entries in `tasks.json` are ignored until renamed, and
-  the 0.1 names (`homelabTasks.productionPattern`, `homelabTasks.refresh`) are
-  no longer honoured either.
+* MIT licensed. The README now starts with the requirements and the
+  repository layout the extension expects; building from source moved to
+  `CONTRIBUTING.md`.
 * New icon: the running figure from [Tabler Icons](https://tabler.io/icons)
   (MIT), replacing the Ansible logo, which is a Red Hat trademark.
-  `media/icon.svg` is the source of `media/icon.png`.
-* New setting `playbookRunner.serviceEnvironments`: the environments *Create Service
-  Skeleton…* creates `group_vars/<name>/` in. Empty (the default) keeps the old
-  behaviour of every environment. A listed name that is not an environment is
-  skipped and named in the confirmation, never created.
 
 ## 0.4.0
 

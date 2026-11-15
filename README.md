@@ -68,9 +68,9 @@ to it shows the newest run and runs it again on click.
 │ ⚠ production — runs here ask for confirmation before they start.                                │
 ├──────────────────┬───────────────────────────────────────────────────────────────────────────────┤
 │ Filter services  │ authentik   1 playbook   env.yml   🔒 Edit vault                              │
-│ ○ all       vars │ ▾ authentik.yml                                    ✓ 3 min ago   ▶            │
-│ ● authentik   3m │   TAGS ▷ podman-user-setup  ▷ deploy-app  ▷ nginx-reverse-proxy …               │
-│ ● dns_servers 1d │   CREATE USER …  podman_servers  [podman-user-setup] …                        │
+│ ≡ all       vars │ ▾ authentik.yml                                    ✓ 3 min ago   ▶            │
+│ ✓ authentik   3m │   TAGS ▷ podman-user-setup  ▷ deploy-app  ▷ nginx-reverse-proxy …               │
+│ ✗ dns_servers 1d │   CREATE USER …  podman_servers  [podman-user-setup] …                        │
 │ ○ immich         │   SETUP  podman/user : Ensure podman_user is defined                          │
 │ …                │   FROM   podman/deploy-app : Get podman user UID                              │
 │                  │   UNTIL  podman/deploy-app : Set podman user UID fact                         │
