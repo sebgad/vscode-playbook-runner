@@ -15,16 +15,19 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
+          # No dependency cache in the job that publishes: a poisoned cache
+          # would end up in the release.
+          package-manager-cache: false
       - run: npm ci
 
       # test/range-plugin.test.js prefers .venv/bin/ansible-playbook over the
       # runner image's own Ansible, so the range plugin is tested against a
       # pinned, known ansible-core rather than whatever the image ships.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Install the tested ansible-core into .venv
