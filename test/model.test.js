@@ -208,6 +208,12 @@ describe("dashboard model", () => {
       assert.equal(parseWebviewMessage({ ...vault, service: undefined }), null);
       assert.equal(parseWebviewMessage({ type: "rekey", folder: "/f" }), null);
       assert.equal(parseWebviewMessage({ type: "createService" }), null);
+      assert.deepEqual(parseWebviewMessage({ type: "getStarted", folder: "/f", extra: 1 }), {
+        type: "getStarted",
+        folder: "/f",
+      });
+      assert.equal(parseWebviewMessage({ type: "getStarted" }), null);
+      assert.equal(parseWebviewMessage({ type: "getStarted", folder: 3 }), null);
     });
 
     /** @param {Record<string, unknown>} fields */

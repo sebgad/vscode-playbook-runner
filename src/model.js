@@ -108,6 +108,7 @@ function buildDashboardModel(folders, readSettingsFor, history) {
  *   | { type: "vault", folder: string, environment: string, service: string, action: "edit" | "create" }
  *   | { type: "rekey", folder: string, environment: string }
  *   | { type: "createService", folder: string }
+ *   | { type: "getStarted", folder: string }
  *   | { type: "createEnvironment", folder: string }
  *   | { type: "renameEnvironment" | "deleteEnvironment", folder: string, environment: string }
  *   | { type: "rerunLast" }
@@ -178,6 +179,8 @@ function parseWebviewMessage(value) {
         : null;
     case "createService":
       return allStrings(raw, ["folder"]) ? { type: "createService", folder: String(raw.folder) } : null;
+    case "getStarted":
+      return allStrings(raw, ["folder"]) ? { type: "getStarted", folder: String(raw.folder) } : null;
     case "createEnvironment":
       return allStrings(raw, ["folder"]) ? { type: "createEnvironment", folder: String(raw.folder) } : null;
     case "renameEnvironment":
