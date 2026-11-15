@@ -201,7 +201,7 @@
         "playbookRunner.confirmProduction": {
           "type": "boolean",
           "default": true,
-          "description": "Ask for confirmation before running a playbook against an environment matching productionPattern."
+          "description": "Ask for confirmation before running a playbook against, or writing the inventory of, an environment matching productionPattern."
         },
         "playbookRunner.ansiblePlaybookCommand": {
           "type": "string",
