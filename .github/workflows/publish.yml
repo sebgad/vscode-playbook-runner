@@ -21,6 +21,18 @@ jobs:
           node-version: 22
       - run: npm ci
 
+      # test/range-plugin.test.js prefers .venv/bin/ansible-playbook over the
+      # runner image's own Ansible, so the range plugin is tested against a
+      # pinned, known ansible-core rather than whatever the image ships.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install the tested ansible-core into .venv
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet 'ansible-core~=2.22.0'
+          .venv/bin/ansible-playbook --version
+
       # A tag must name the version package.json carries — a Marketplace
       # version number can never be reused.
       - name: Check tag matches package.json version

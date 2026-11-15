@@ -5,7 +5,7 @@ const globals = require("globals");
 
 module.exports = [
   {
-    ignores: ["node_modules/**", "dist/**", "**/*.vsix"],
+    ignores: ["node_modules/**", "dist/**", "**/*.vsix", ".venv/**"],
   },
   js.configs.recommended,
   {
