@@ -17,7 +17,15 @@ const {
   parseInventory,
   serializeInventory,
   validateInventory,
+  applyGroupRename,
+  planGroupDelete,
+  planGroupRename,
+  playbooksNamingGroup,
 } = require("../src/inventory");
+const fs = require("node:fs");
+const path = require("node:path");
+const { DEFAULTS, findEnvironments } = require("../src/discovery");
+const { makeFixture, removeFixture, required } = require("./helpers");
 
 const SSH = "ansible_ssh_common_args='-o StrictHostKeyChecking=accept-new'";
 
@@ -438,5 +446,110 @@ describe("inventoryHash and newInventoryText", () => {
       newInventoryText(),
       `# Edited by Playbook Runner. Text between these two marker lines is kept as written:\n${MANUAL_BEGIN}\n${MANUAL_END}\n`,
     );
+  });
+});
+
+describe("group rename and delete plans", () => {
+  const HOSTS = [
+    "[podman_servers]",
+    "podman_server ansible_host=podman.example.test",
+    "",
+    "[nfs_servers]",
+    "nfs_server ansible_host=nfs.example.test",
+    "",
+    "[immich:children]",
+    "podman_servers",
+    "",
+    "[nextcloud:children]",
+    "podman_servers",
+    "",
+    "[solo:children]",
+    "nfs_servers",
+    "",
+  ].join("\n");
+
+  /** @param {string} text @param {string[]} [extra] */
+  const setup = (text, extra = []) => {
+    const root = makeFixture([
+      ["inventories/production/hosts.ini", text],
+      ["inventories/production/group_vars/podman_servers/env.yml", "a: 1\n"],
+      ["inventories/staging/hosts.ini", "[podman_servers]\nx\n"],
+      ["playbooks/immich.yml", "- hosts: immich\n"],
+      ...extra.map((file) => /** @type {[string, string]} */ ([file, ""])),
+    ]);
+    const environment = required(
+      findEnvironments(root).find((item) => item.name === "production"),
+      "production",
+    );
+    return { root, environment };
+  };
+
+  it("finds playbooks whose hosts line names the group", () => {
+    const root = makeFixture([
+      ["playbooks/a.yml", "- hosts: immich\n"],
+      ["playbooks/b.yml", '- name: x\n  hosts: "a:immich"\n'],
+      ["playbooks/c.yml", "- hosts: '!immich'\n"],
+      ["playbooks/d.yml", "- hosts: immich_x\n"],
+    ]);
+    try {
+      assert.deepEqual(playbooksNamingGroup(root, DEFAULTS, "immich"), [
+        path.join("playbooks", "a.yml"),
+        path.join("playbooks", "b.yml"),
+        path.join("playbooks", "c.yml"),
+      ]);
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  it("rename plan renames children and group_vars", () => {
+    const { root, environment } = setup(HOSTS);
+    try {
+      const plan = planGroupRename(root, DEFAULTS, environment, HOSTS, "podman_servers", "podman");
+      assert.match(plan.text, /\[podman\]/);
+      assert.match(plan.text, /\[immich:children\]\npodman\n/);
+      assert.ok(plan.groupVarsFrom && plan.groupVarsFrom.endsWith(path.join("group_vars", "podman_servers")));
+      assert.deepEqual(plan.services, ["immich", "nextcloud"]);
+      assert.deepEqual(plan.otherEnvironments, ["staging"]);
+      applyGroupRename(plan, environment.inventory);
+      assert.ok(fs.existsSync(path.join(environment.groupVarsDir, "podman", "env.yml")));
+      assert.ok(!fs.existsSync(path.join(environment.groupVarsDir, "podman_servers")));
+      assert.match(fs.readFileSync(environment.inventory, "utf8"), /\[podman\]/);
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  it("rename refuses a taken name, a manual group and an existing group_vars target", () => {
+    const manual = `${HOSTS}\n${MANUAL_BEGIN}\n[hand]\nbox\n${MANUAL_END}\n`;
+    const { root, environment } = setup(manual, ["inventories/production/group_vars/free/env.yml"]);
+    try {
+      assert.throws(() => planGroupRename(root, DEFAULTS, environment, manual, "podman_servers", "nfs_servers"));
+      assert.throws(() => planGroupRename(root, DEFAULTS, environment, manual, "hand", "other"));
+      assert.throws(() => planGroupRename(root, DEFAULTS, environment, manual, "podman_servers", "free"));
+      assert.throws(() => planGroupRename(root, DEFAULTS, environment, manual, "podman_servers", "bad name"));
+      assert.throws(() => planGroupRename(root, DEFAULTS, environment, manual, "missing", "other"));
+    } finally {
+      removeFixture(root);
+    }
+  });
+
+  it("delete plan removes the group from every service and lists emptied ones", () => {
+    const { root, environment } = setup(HOSTS);
+    try {
+      const plan = planGroupDelete(root, DEFAULTS, environment, HOSTS, "nfs_servers");
+      assert.deepEqual(plan.services, ["solo"]);
+      assert.deepEqual(plan.emptied, ["solo"]);
+      assert.equal(plan.groupVars, null);
+      assert.doesNotMatch(plan.text, /nfs_servers/);
+      const withVars = planGroupDelete(root, DEFAULTS, environment, HOSTS, "podman_servers");
+      assert.deepEqual(withVars.services, ["immich", "nextcloud"]);
+      assert.deepEqual(withVars.emptied, ["immich", "nextcloud"]);
+      assert.deepEqual(withVars.playbooks, []);
+      assert.ok(withVars.groupVars);
+      assert.throws(() => planGroupDelete(root, DEFAULTS, environment, HOSTS, "nope"));
+    } finally {
+      removeFixture(root);
+    }
   });
 });

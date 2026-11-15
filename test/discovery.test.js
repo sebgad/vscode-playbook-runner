@@ -16,6 +16,7 @@ const { after, before, describe, it } = require("node:test");
 const {
   ROOT_GROUP,
   findEnvironments,
+  findInventoryCandidates,
   findPlaybooks,
   findServices,
   findVaultGroups,
@@ -290,5 +291,16 @@ describe("findVaultGroups", () => {
 
   it("returns nothing without an environment at all", () => {
     assert.deepEqual(findVaultGroups(undefined), []);
+  });
+});
+
+describe("findInventoryCandidates", () => {
+  it("lists inventory directories without an inventory file", () => {
+    const dir = makeFixture(["inventories/a/hosts.ini", "inventories/b/"], { prefix: "playbook-runner-candidates-" });
+    try {
+      assert.deepEqual(findInventoryCandidates(dir), [{ name: "b", dir: path.join(dir, "inventories", "b") }]);
+    } finally {
+      removeFixture(dir);
+    }
   });
 });

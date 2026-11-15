@@ -10,6 +10,10 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const { findEnvironments, findPlaybooks, isDirectory } = require("./discovery");
 
 /** @typedef {[string, string]} Var */
 /** @typedef {{ name: string, vars: Var[] }} Host */
@@ -776,16 +780,233 @@ function newInventoryText() {
   return `# Edited by Playbook Runner. Text between these two marker lines is kept as written:\n${MANUAL_BEGIN}\n${MANUAL_END}\n`;
 }
 
+/**
+ * Every playbook (path relative to `root`, sorted) with a `hosts:` line that
+ * names `group`, alone or in a pattern such as `a:immich` or `!immich`.
+ *
+ * @param {string} root
+ * @param {import("./defaults").Settings} settings
+ * @param {string} group
+ * @returns {string[]}
+ */
+function playbooksNamingGroup(root, settings, group) {
+  /** @type {string[]} */
+  const found = [];
+  for (const playbookGroup of findPlaybooks(root, settings)) {
+    for (const playbook of playbookGroup.playbooks) {
+      let text = "";
+      try {
+        text = fs.readFileSync(playbook.file, "utf8");
+      } catch {
+        continue;
+      }
+      const names = text.split(/\r?\n/).some((line) => {
+        const match = /^\s*(?:-\s+)?hosts:\s*(.+?)\s*$/.exec(line);
+        if (!match || match[1] === undefined) {
+          return false;
+        }
+        const value = match[1].replace(/^(["'])(.*)\1$/, "$2");
+        return value.split(/[:,]/).some((part) => part.trim().replace(/^[&!]+/, "") === group);
+      });
+      if (names) {
+        found.push(path.relative(root, playbook.file));
+      }
+    }
+  }
+  return found.sort();
+}
+
+/**
+ * @typedef {object} GroupRenamePlan
+ * @property {string} environment
+ * @property {string} from
+ * @property {string} to
+ * @property {string} text New inventory text.
+ * @property {string | null} groupVarsFrom group_vars directory to move, if there is one.
+ * @property {string} groupVarsTo
+ * @property {string[]} services Services that list the group as a child.
+ * @property {string[]} playbooks Playbooks naming the group (they are not edited).
+ * @property {string[]} otherEnvironments Other environments that have a group of that name.
+ */
+
+/**
+ * @param {string} diskText
+ * @param {string} name
+ * @param {string} verb
+ * @returns {Inventory}
+ */
+function parseForGroupChange(diskText, name, verb) {
+  const inventory = parseInventory(diskText);
+  if (inventory.error) {
+    throw new Error(`The inventory cannot be read, so the group is left alone: ${inventory.error}`);
+  }
+  if (inventory.manualGroups.includes(name)) {
+    throw new Error(`"${name}" is defined in a manual block; edit the text yourself to ${verb} it.`);
+  }
+  const group = inventory.serverGroups.find((item) => item.name === name);
+  if (!group) {
+    throw new Error(`"${name}" is not a server group of this inventory.`);
+  }
+  if (group.readOnly) {
+    throw new Error(`"${name}" cannot be edited here; edit the inventory text to ${verb} it.`);
+  }
+  return inventory;
+}
+
+/**
+ * @param {string} root
+ * @param {import("./defaults").Settings} settings
+ * @param {import("./discovery").Environment} environment
+ * @param {string} diskText
+ * @param {string} from
+ * @param {string} to
+ * @returns {GroupRenamePlan}
+ */
+function planGroupRename(root, settings, environment, diskText, from, to) {
+  const inventory = parseForGroupChange(diskText, from, "rename");
+  if (!GROUP_NAME.test(to)) {
+    throw new Error(`"${to}" is not a valid group name (letters, digits and underscores; not starting with a digit).`);
+  }
+  const taken = [...inventory.serverGroups, ...inventory.services].some((item) => item.name === to);
+  if (taken || inventory.manualGroups.includes(to)) {
+    throw new Error(`A group named "${to}" already exists.`);
+  }
+  const groupVarsTo = path.join(environment.groupVarsDir, to);
+  if (fs.existsSync(groupVarsTo)) {
+    throw new Error(`${groupVarsTo} already exists, so "${from}" cannot be renamed to "${to}".`);
+  }
+  const groupVarsFromPath = path.join(environment.groupVarsDir, from);
+
+  /** @type {string[]} */
+  const services = [];
+  const renamed = {
+    ...inventory,
+    serverGroups: inventory.serverGroups.map((group) => (group.name === from ? { ...group, name: to } : group)),
+    services: inventory.services.map((service) => {
+      if (!service.children.includes(from)) {
+        return service;
+      }
+      services.push(service.name);
+      return { ...service, children: service.children.map((child) => (child === from ? to : child)) };
+    }),
+  };
+
+  /** @type {string[]} */
+  const otherEnvironments = [];
+  for (const other of findEnvironments(root, settings)) {
+    if (other.name === environment.name) {
+      continue;
+    }
+    try {
+      const parsed = parseInventory(fs.readFileSync(other.inventory, "utf8"));
+      if ([...parsed.serverGroups, ...parsed.services].some((item) => item.name === from)) {
+        otherEnvironments.push(other.name);
+      }
+    } catch {
+      // An unreadable sibling inventory is not this plan's problem.
+    }
+  }
+
+  return {
+    environment: environment.name,
+    from,
+    to,
+    text: serializeInventory(renamed),
+    groupVarsFrom: isDirectory(groupVarsFromPath) ? groupVarsFromPath : null,
+    groupVarsTo,
+    services,
+    playbooks: playbooksNamingGroup(root, settings, from),
+    otherEnvironments,
+  };
+}
+
+/**
+ * @typedef {object} GroupDeletePlan
+ * @property {string} environment
+ * @property {string} name
+ * @property {string} text New inventory text.
+ * @property {string | null} groupVars group_vars directory of the group, if it exists (left on disk).
+ * @property {string[]} services Services that listed the group.
+ * @property {string[]} emptied Those services that end up with no children and no hosts.
+ * @property {string[]} playbooks Playbooks naming the group.
+ */
+
+/**
+ * @param {string} root
+ * @param {import("./defaults").Settings} settings
+ * @param {import("./discovery").Environment} environment
+ * @param {string} diskText
+ * @param {string} name
+ * @returns {GroupDeletePlan}
+ */
+function planGroupDelete(root, settings, environment, diskText, name) {
+  const inventory = parseForGroupChange(diskText, name, "delete");
+  /** @type {string[]} */
+  const services = [];
+  /** @type {string[]} */
+  const emptied = [];
+  const next = {
+    ...inventory,
+    serverGroups: inventory.serverGroups.filter((group) => group.name !== name),
+    services: inventory.services.map((service) => {
+      if (!service.children.includes(name)) {
+        return service;
+      }
+      services.push(service.name);
+      const children = service.children.filter((child) => child !== name);
+      if (children.length === 0 && service.hosts.length === 0) {
+        emptied.push(service.name);
+      }
+      return { ...service, children };
+    }),
+  };
+  const groupVars = path.join(environment.groupVarsDir, name);
+  return {
+    environment: environment.name,
+    name,
+    text: serializeInventory(next),
+    groupVars: isDirectory(groupVars) ? groupVars : null,
+    services,
+    emptied,
+    playbooks: playbooksNamingGroup(root, settings, name),
+  };
+}
+
+/**
+ * Write the new inventory, then move the group_vars directory. The text goes
+ * first: a failed write then changes nothing at all.
+ *
+ * @param {GroupRenamePlan} plan
+ * @param {string} inventoryPath
+ */
+function applyGroupRename(plan, inventoryPath) {
+  fs.writeFileSync(inventoryPath, plan.text);
+  if (plan.groupVarsFrom) {
+    try {
+      fs.renameSync(plan.groupVarsFrom, plan.groupVarsTo);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `The inventory was already changed, but the group_vars directory was not moved (${plan.groupVarsFrom} to ${plan.groupVarsTo}): ${reason}`,
+      );
+    }
+  }
+}
+
 module.exports = {
   MANUAL_BEGIN,
   MANUAL_END,
   PASSWORD_VARS,
   SSH_FIELDS,
+  applyGroupRename,
   describeChanges,
   inventoryHash,
   mergeEdits,
   newInventoryText,
   parseInventory,
+  planGroupDelete,
+  planGroupRename,
+  playbooksNamingGroup,
   serializeInventory,
   validateInventory,
 };

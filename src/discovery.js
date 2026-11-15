@@ -182,6 +182,28 @@ function findEnvironments(root, settings) {
 }
 
 /**
+ * @typedef {object} InventoryCandidate
+ * @property {string} name directory name under the inventories directory
+ * @property {string} dir
+ */
+
+/**
+ * Directories under `inventories/` that have no inventory file yet, so the
+ * Inventory tab can offer to create one.
+ *
+ * @param {string} root workspace folder path
+ * @param {Partial<import("./defaults").Settings>} [settings]
+ * @returns {InventoryCandidate[]}
+ */
+function findInventoryCandidates(root, settings) {
+  const config = withDefaults(settings);
+  const base = path.join(root, config.inventoriesDir);
+  return listDirectoryNames(base)
+    .map((name) => ({ name, dir: path.join(base, name) }))
+    .filter((candidate) => !isFile(path.join(candidate.dir, config.inventoryFile)));
+}
+
+/**
  * @typedef {object} PlaybookGroup
  * @property {string} name
  * @property {string} dir
@@ -328,6 +350,7 @@ module.exports = {
   DEFAULTS,
   ROOT_GROUP,
   findEnvironments,
+  findInventoryCandidates,
   findPlaybooks,
   findServices,
   findVaultGroups,
