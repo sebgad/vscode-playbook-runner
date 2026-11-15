@@ -17,3 +17,5 @@ workflow.md
 **/__pycache__/**
 CLAUDE.md
 CONTRIBUTING.md
+.mypy_cache/**
+.superpowers/**

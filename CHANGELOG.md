@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0
+
+No change to the extension itself: what ships is the same as 0.5.0.
+
+### Publishing
+
+* Releases are published to the VS Code Marketplace by a GitHub Actions
+  workflow with Trusted Publishing, so no access token is kept anywhere. The
+  workflow runs the full check, with the range plugin tested against a pinned
+  ansible-core, before it publishes; its actions now run on Node 24, as
+  GitHub's Node 20 deprecation requires.
+
 ## 0.5.0
 
 The first release published on the Visual Studio Marketplace and Open VSX
