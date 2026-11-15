@@ -172,8 +172,13 @@ blocking, whether to save or cancel. Edits are kept as a draft per environment
 **What a save does to the file.** The page writes the whole file from what it
 shows, so anything it cannot show is at risk. The confirmation lists it first:
 comments outside manual blocks, duplicate sections (merged), duplicate entries
-and lines the page cannot read. Quoted values such as `port="22"` keep their
-quotes, and `[all]` is written only when `all` has hosts. To keep a hand-written
+and lines the page cannot read. Values in `:vars` sections are written exactly
+as typed, since Ansible evaluates them itself: `mylist=["a", "b"]` stays a
+list, and a `#` or `;` after the value is part of it (only a line starting
+with one is a comment). Host-line values are quoted as needed, so one holding
+both `'` and `"` is refused. Quoted values such as `port="22"` keep their
+quotes, every group gets its `[group]` header even with only variables, and
+`[all]` is written only when `all` has hosts. To keep a hand-written
 part as it is, put it between two marker lines:
 
 ```
@@ -200,7 +205,9 @@ file is read-only in the tab until fixed.
   children. A delete removes the group from every service and offers to move its
   `group_vars/<name>/` to the trash. File-form group variables
   (`<name>.yml`, `.yaml`, `.json`) and manual blocks that still name the group
-  are listed in the confirmation but not changed.
+  are listed in the confirmation but not changed; a manual block that lists
+  the group as a child has to be edited first. The confirmation also lists
+  what the rewrite drops or merges, and offers *Show diff* as *Save* does.
 * **Only INI inventories** are editable; a YAML one shows *Editing is only
   supported for INI inventories.* A folder under `inventories/` with no
   inventory file offers *Create inventory*, which writes a skeleton containing

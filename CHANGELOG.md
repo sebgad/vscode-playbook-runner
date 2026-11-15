@@ -8,11 +8,13 @@
   group variables, and the groups each service lists as children. Server groups
   and services can be created, renamed and deleted; a rename or delete carries
   the group's `group_vars` directory (and the services' children entries)
-  along. *Show diff* reads the change before *Save*.
+  along. *Show diff* reads the change before *Save*, *Rename* or *Delete*.
 * Text between the lines `# playbook-runner: manual begin` and
   `# playbook-runner: manual end` is kept verbatim; other comments, duplicate sections and entries
   the page cannot read are dropped or merged on save, and the confirmation says
-  so first.
+  so first (for a rename or delete too). Values in `:vars` sections are kept
+  exactly as written, since Ansible evaluates them; a byte order mark and
+  CRLF line endings are kept.
 * A save is refused while the file has unsaved edits in an editor, while a
   playbook runs against the environment, or when the file changed on disk since
   the page loaded. Password variables (`ansible_password`, …) are refused: use
