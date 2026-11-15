@@ -201,7 +201,9 @@ last time that has since disappeared stays in the list, marked.
 1. `playbookRunner.vaultPasswordFiles["<env>"]`, if set;
 2. `playbookRunner.vaultPasswordFilePattern`, by default
    `${userHome}/.ansible-vault/${env}.pass`;
-3. if that file does not exist, `--ask-vault-password`.
+3. if that file does not exist, `--ask-vault-password` — but only when the
+   environment has something encrypted (a vault file or an inline `!vault`
+   value). Without one, a run asks for nothing.
 
 ```jsonc
 "playbookRunner.vaultPasswordFiles": {

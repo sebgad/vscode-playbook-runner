@@ -55,6 +55,28 @@ describe("buildPlaybookArgs", () => {
     assert.equal(args.includes("--ask-vault-password"), false);
   });
 
+  it("does not ask for a vault password when the environment has no vault", () => {
+    assert.deepEqual(
+      buildPlaybookArgs({
+        inventory: "inventories/lab/hosts.ini",
+        playbook: "playbooks/app/app.yml",
+        usesVault: false,
+      }),
+      ["-i", "inventories/lab/hosts.ini", "playbooks/app/app.yml"],
+    );
+  });
+
+  it("still passes a resolved password file when no vault was found", () => {
+    // A file never prompts, and covers vault content the scan cannot see.
+    const args = buildPlaybookArgs({
+      inventory: "inventories/lab/hosts.ini",
+      playbook: "playbooks/app/app.yml",
+      vaultPasswordFile: "/home/user/.ansible-vault/lab.pass",
+      usesVault: false,
+    });
+    assert.deepEqual(args.slice(3), ["--vault-password-file", "/home/user/.ansible-vault/lab.pass"]);
+  });
+
   it("appends the options in a stable order", () => {
     assert.deepEqual(
       buildPlaybookArgs({

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **No vault, no passphrase prompt.** A playbook run against an environment
+  with nothing encrypted no longer asks for a vault password; it used to, on
+  every run, whenever no password file was configured. Vault content outside
+  the environment (in a role) still needs a password file.
 * **Inventory tab**: edit an environment's INI inventory from the dashboard —
   hosts, their SSH login (`ansible_host`, `ansible_user`, `ansible_port`,
   `ansible_ssh_private_key_file`, `ansible_ssh_common_args`), other host and

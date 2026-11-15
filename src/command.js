@@ -11,13 +11,20 @@
 const path = require("path");
 
 /**
+ * How ansible gets the vault passphrase: from the resolved file, else by
+ * prompting -- unless nothing is encrypted (`usesVault: false`), when a prompt
+ * would only ask for a passphrase no file needs. A file is still passed then:
+ * it never prompts, and covers vault content a scan cannot see.
+ *
  * @param {string | null} vaultPasswordFile
+ * @param {boolean} [usesVault] defaults to true
  * @returns {string[]}
  */
-function vaultArgs(vaultPasswordFile) {
-  return vaultPasswordFile
-    ? ["--vault-password-file", vaultPasswordFile]
-    : ["--ask-vault-password"];
+function vaultArgs(vaultPasswordFile, usesVault = true) {
+  if (vaultPasswordFile) {
+    return ["--vault-password-file", vaultPasswordFile];
+  }
+  return usesVault ? ["--ask-vault-password"] : [];
 }
 
 /** The most -v ansible has a meaning for. */
@@ -107,7 +114,7 @@ function sanitizeRunOptions(value) {
 /**
  * The argument vector for one playbook run.
  *
- * @param {{ inventory: string, playbook: string, vaultPasswordFile?: string | null, options?: RunOptions }} spec
+ * @param {{ inventory: string, playbook: string, vaultPasswordFile?: string | null, usesVault?: boolean, options?: RunOptions }} spec
  * @returns {string[]}
  */
 function buildPlaybookArgs(spec) {
@@ -116,7 +123,7 @@ function buildPlaybookArgs(spec) {
     "-i",
     spec.inventory,
     spec.playbook,
-    ...vaultArgs(spec.vaultPasswordFile || null),
+    ...vaultArgs(spec.vaultPasswordFile || null, spec.usesVault !== false),
   ];
 
   if (options.tags) {

@@ -20,7 +20,7 @@ const {
   sanitizeRunOptions,
   validateTaskRange,
 } = require("./command");
-const { findEnvironments, findInventoryCandidates, findServices } = require("./discovery");
+const { environmentUsesVault, findEnvironments, findInventoryCandidates, findServices } = require("./discovery");
 const { STRUCTURED_INVENTORY } = require("./environments");
 const { latestFor } = require("./history");
 const { MANUAL_BEGIN, MANUAL_END, inventoryHash, parseInventory } = require("./inventory");
@@ -652,6 +652,8 @@ function playbookArgv(root, settings, environment, playbookFile, options) {
     inventory: path.relative(root, environment.inventory),
     playbook: path.relative(root, playbookFile),
     vaultPasswordFile: resolveVaultPasswordFile(settings, environment.name, root),
+    // The inventory's directory is the environment's.
+    usesVault: environmentUsesVault({ dir: path.dirname(environment.inventory) }),
     options,
   });
 }

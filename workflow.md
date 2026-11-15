@@ -533,6 +533,17 @@ tree without a reload.
     warning and the diff can be read before saving. A file the parser cannot
     place safely (unbalanced markers, a manual block opening a section without
     a following header) stays read-only in the tab.
+26. ✅ a playbook run asks for the vault passphrase only when the environment
+    has something encrypted. Step 5's fallback passed `--ask-vault-password`
+    whenever no password file resolved, and ansible prompts on that flag even
+    when nothing needs decrypting -- so an environment without a vault asked
+    for a passphrase on every run. `discovery.environmentUsesVault` now looks
+    for `$ANSIBLE_VAULT;` (a vault file or an inline `!vault` value) in any
+    file under the environment's directory; without one the flag is left out.
+    A resolved password file is still passed, since it never prompts. **The
+    accepted cost:** vault content outside the environment -- in a role or a
+    playbook's own vars -- is not seen; such a run fails with "no vault
+    secrets found" unless a password file is configured.
 
 ## 10. Verification
 
