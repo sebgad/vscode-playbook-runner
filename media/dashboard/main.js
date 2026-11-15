@@ -24,9 +24,106 @@
    * @property {number} verbosity
    */
 
+  /**
+   * One environment's inventory as the Inventory tab edits it. `added` marks
+   * a group typed in on this page (its name is still editable); it is not
+   * sent. Server groups carry an empty `children`.
+   *
+   * @typedef {[string, string]} Var
+   * @typedef {{ name: string, vars: Var[] }} Host
+   * @typedef {{ name: string, children: string[], hosts: Host[], vars: Var[], readOnly: boolean, added: boolean }} Group
+   * @typedef {{ hash: string, serverGroups: Group[], services: Group[] }} Draft
+   */
+
+  const MAX_DRAFTS = 50;
+  const MAX_ITEMS = 500;
+
+  /** @param {unknown} value @returns {string[] | null} */
+  function restoreStrings(value) {
+    return Array.isArray(value) && value.length <= MAX_ITEMS && value.every((item) => typeof item === "string")
+      ? value.map(String)
+      : null;
+  }
+
+  /** @param {unknown} value @returns {Var[] | null} */
+  function restoreVars(value) {
+    if (!Array.isArray(value) || value.length > MAX_ITEMS) {
+      return null;
+    }
+    /** @type {Var[]} */
+    const vars = [];
+    for (const item of value) {
+      if (!Array.isArray(item) || item.length !== 2 || typeof item[0] !== "string" || typeof item[1] !== "string") {
+        return null;
+      }
+      vars.push([item[0], item[1]]);
+    }
+    return vars;
+  }
+
+  /** @param {unknown} value @returns {Group[] | null} */
+  function restoreGroups(value) {
+    if (!Array.isArray(value) || value.length > MAX_ITEMS) {
+      return null;
+    }
+    /** @type {Group[]} */
+    const groups = [];
+    for (const item of value) {
+      if (!item || typeof item !== "object" || typeof item.name !== "string" || !Array.isArray(item.hosts) || item.hosts.length > MAX_ITEMS) {
+        return null;
+      }
+      const children = restoreStrings(item.children);
+      const vars = restoreVars(item.vars);
+      /** @type {Host[]} */
+      const hosts = [];
+      for (const host of item.hosts) {
+        const hostVars = host && typeof host === "object" && typeof host.name === "string" ? restoreVars(host.vars) : null;
+        if (!hostVars) {
+          return null;
+        }
+        hosts.push({ name: host.name, vars: hostVars });
+      }
+      if (!children || !vars) {
+        return null;
+      }
+      groups.push({ name: item.name, children, hosts, vars, readOnly: item.readOnly === true, added: item.added === true });
+    }
+    return groups;
+  }
+
+  /**
+   * Inventory drafts from the saved page state: JSON that survived a reload,
+   * possibly from an older page. A draft that does not have the exact shape
+   * is dropped whole rather than half-restored.
+   *
+   * @param {unknown} value
+   * @returns {Map<string, Draft>}
+   */
+  function restoreDrafts(value) {
+    /** @type {Map<string, Draft>} */
+    const drafts = new Map();
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return drafts;
+    }
+    for (const [key, raw] of Object.entries(value).slice(0, MAX_DRAFTS)) {
+      if (!raw || typeof raw !== "object" || typeof raw.hash !== "string" || !key.includes("\n")) {
+        continue;
+      }
+      const serverGroups = restoreGroups(raw.serverGroups);
+      const services = restoreGroups(raw.services);
+      if (serverGroups && services) {
+        drafts.set(key, { hash: raw.hash, serverGroups, services });
+      }
+    }
+    return drafts;
+  }
+
   const saved = /** @type {Record<string, any>} */ (vscode.getState() || {});
   const state = {
-    /** @type {"runs" | "settings"} */ tab: saved.tab === "settings" ? "settings" : "runs",
+    /** @type {"runs" | "settings" | "inventory"} */
+    tab: saved.tab === "settings" || saved.tab === "inventory" ? saved.tab : "runs",
+    /** @type {Map<string, Draft>} folder path + "\n" + environment name -> unsaved inventory */
+    drafts: restoreDrafts(saved.drafts),
     /** @type {string | null} */ folder: typeof saved.folder === "string" ? saved.folder : null,
     /** @type {string | null} */ environment: typeof saved.environment === "string" ? saved.environment : null,
     /** @type {string | null} */ service: typeof saved.service === "string" ? saved.service : null,
@@ -109,6 +206,7 @@
       selected: state.selected,
       range: state.range,
       opts: state.opts,
+      drafts: Object.fromEntries(state.drafts),
     });
   }
 
@@ -427,10 +525,10 @@
 
   // ── Rendering ──────────────────────────────────────────────────────────
 
-  /** Runs | Settings */
+  /** Runs | Settings | Inventory */
   function tabs() {
-    /** @param {"runs" | "settings"} tab @param {string} name @param {string} label */
-    const tabButton = (tab, name, label) =>
+    /** @param {"runs" | "settings" | "inventory"} tab @param {string} name @param {string} label @param {boolean} [unsaved] */
+    const tabButton = (tab, name, label, unsaved = false) =>
       h(
         "button",
         {
@@ -444,12 +542,14 @@
         },
         icon(name),
         label,
+        unsaved ? unsavedMark() : null,
       );
     return h(
       "div",
       { class: "segmented", role: "tablist", "aria-label": "View" },
       tabButton("runs", "play-circle", "Runs"),
       tabButton("settings", "settings-gear", "Settings"),
+      tabButton("inventory", "server-environment", "Inventory", state.drafts.size > 0),
     );
   }
 
@@ -782,6 +882,7 @@
             },
             h("span", { class: `env-dot ${env.isProduction ? "production" : ""}` }),
             env.name,
+            state.drafts.has(draftKey(folder, env)) ? unsavedMark() : null,
           ),
         ),
       ),
@@ -1408,6 +1509,1086 @@
     );
   }
 
+  // ── Inventory tab ──────────────────────────────────────────────────────
+  //
+  // The page edits a draft per environment and sends all of it on Save. The
+  // checks here are a convenience: the extension rebuilds the message,
+  // validates the result again and asks before it writes anything.
+
+  const SSH_FIELDS = [
+    "ansible_host",
+    "ansible_user",
+    "ansible_port",
+    "ansible_ssh_private_key_file",
+    "ansible_ssh_common_args",
+  ];
+  const SSH_FIELD_SET = new Set(SSH_FIELDS);
+  const PASSWORD_VARS = new Set(["ansible_password", "ansible_ssh_pass", "ansible_become_pass", "ansible_become_password"]);
+  const GROUP_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  const HOST_NAME = /^[A-Za-z0-9_.\-[\]:]+$/;
+  const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+  /** @type {Map<string, string>} draft key -> why the last save was refused */
+  const inventoryErrors = new Map();
+  /** @type {Set<string>} expanded server groups, by draft key + index */
+  const openGroups = new Set();
+  /** @type {Set<string>} hosts whose form is open, by draft key + group + index */
+  const openHosts = new Set();
+  /** @type {string | null} the group whose ⋯ menu is open */
+  let openMenu = null;
+
+  /** @param {any} folder @param {any} environment */
+  function draftKey(folder, environment) {
+    return `${folder.path}\n${environment.name}`;
+  }
+
+  /** @returns {HTMLElement} */
+  function unsavedMark() {
+    return h("span", { class: "unsaved-mark", title: "Unsaved inventory changes", "aria-label": "unsaved changes" }, "●");
+  }
+
+  /** Forget drafts of environments the model no longer has. */
+  function pruneDrafts() {
+    if (!model) {
+      return;
+    }
+    const known = new Set(
+      model.folders.flatMap((/** @type {any} */ f) => f.environments.map((/** @type {any} */ e) => draftKey(f, e))),
+    );
+    let pruned = false;
+    for (const key of [...state.drafts.keys()]) {
+      if (!known.has(key)) {
+        state.drafts.delete(key);
+        inventoryErrors.delete(key);
+        pruned = true;
+      }
+    }
+    if (pruned) {
+      persist();
+    }
+  }
+
+  /** @param {any} group @returns {Group} */
+  function copyGroup(group) {
+    return {
+      name: String(group.name),
+      children: Array.isArray(group.children) ? group.children.map(String) : [],
+      hosts: group.hosts.map((/** @type {any} */ host) => ({
+        name: String(host.name),
+        vars: host.vars.map((/** @type {any} */ v) => /** @type {Var} */ ([String(v[0]), String(v[1])])),
+      })),
+      vars: group.vars.map((/** @type {any} */ v) => /** @type {Var} */ ([String(v[0]), String(v[1])])),
+      readOnly: Boolean(group.readOnly),
+      added: false,
+    };
+  }
+
+  /**
+   * @typedef {object} InventoryContext
+   * @property {string} key
+   * @property {any} folder
+   * @property {any} environment
+   * @property {any} inventory   the model's view of the file
+   * @property {Draft | null} draft
+   * @property {boolean} frozen  a draft of a file that has changed since
+   * @property {boolean} canEdit
+   * @property {Group[]} serverGroups  what is shown: the draft's, or the file's
+   * @property {Group[]} services
+   */
+
+  /** @param {any} folder @param {any} environment @returns {InventoryContext} */
+  function inventoryContext(folder, environment) {
+    const key = draftKey(folder, environment);
+    const inventory = environment.inventory;
+    const draft = state.drafts.get(key) || null;
+    // A draft is never moved onto a new hash: it stays, frozen, to copy from.
+    const frozen = Boolean(draft && (draft.hash !== inventory.hash || !inventory.editable));
+    return {
+      key,
+      folder,
+      environment,
+      inventory,
+      draft,
+      frozen,
+      canEdit: Boolean(inventory.editable) && !frozen,
+      serverGroups: draft ? draft.serverGroups : inventory.serverGroups,
+      services: draft ? draft.services : inventory.services,
+    };
+  }
+
+  /**
+   * Change the draft of the shown environment, making it from the file on the
+   * first edit.
+   *
+   * @param {InventoryContext} ctx @param {(draft: Draft) => void} change
+   */
+  function mutate(ctx, change) {
+    if (!ctx.canEdit) {
+      return;
+    }
+    let draft = state.drafts.get(ctx.key);
+    if (!draft) {
+      draft = {
+        hash: ctx.inventory.hash,
+        serverGroups: ctx.inventory.serverGroups.map(copyGroup),
+        services: ctx.inventory.services.map(copyGroup),
+      };
+      state.drafts.set(ctx.key, draft);
+    }
+    change(draft);
+    persist();
+    render();
+  }
+
+  /** @param {Var[]} vars @param {string} key @param {string} value */
+  function setVar(vars, key, value) {
+    const at = vars.findIndex((v) => v[0] === key);
+    if (!value) {
+      if (at >= 0) {
+        vars.splice(at, 1);
+      }
+    } else if (at >= 0) {
+      vars[at] = [key, value];
+    } else {
+      vars.push([key, value]);
+    }
+  }
+
+  /** @param {Var[]} vars @param {string} key */
+  function getVar(vars, key) {
+    const found = vars.find((v) => v[0] === key);
+    return found ? found[1] : "";
+  }
+
+  /** @param {string} file */
+  function baseName(file) {
+    return String(file).split(/[\\/]/).pop() || String(file);
+  }
+
+  /** @param {InventoryContext} ctx @returns {Map<string, number>} */
+  function nameCounts(ctx) {
+    /** @type {Map<string, number>} */
+    const counts = new Map();
+    const groups = [...ctx.serverGroups, ...ctx.services];
+    for (const group of groups) {
+      counts.set(group.name, (counts.get(group.name) || 0) + 1);
+    }
+    for (const name of ctx.inventory.manualGroups || []) {
+      // A read-only entry is the model's view of the manual group itself.
+      if (!groups.some((group) => group.readOnly && group.name === name)) {
+        counts.set(name, (counts.get(name) || 0) + 1);
+      }
+    }
+    return counts;
+  }
+
+  /** @param {string} name @param {Map<string, number>} counts @returns {string | null} */
+  function groupNameProblem(name, counts) {
+    if (!name) {
+      return "Give the group a name.";
+    }
+    if (!GROUP_NAME.test(name)) {
+      return `"${name}" is not a valid group name: letters, digits and _, not starting with a digit.`;
+    }
+    return (counts.get(name) || 0) > 1 ? `"${name}" is used by another group.` : null;
+  }
+
+  /** @param {Group} group @param {number} index @returns {string | null} */
+  function hostNameProblem(group, index) {
+    const host = group.hosts[index];
+    if (!host) {
+      return null;
+    }
+    if (!host.name) {
+      return "The host has no name.";
+    }
+    if (!HOST_NAME.test(host.name)) {
+      return `"${host.name}" is not a valid host name.`;
+    }
+    return group.hosts.findIndex((other) => other.name === host.name) !== index
+      ? `${host.name} is listed twice in ${group.name}.`
+      : null;
+  }
+
+  /** @param {string} key @param {string} groupName @returns {string | null} */
+  function varProblem(key, groupName) {
+    if (!key) {
+      return "A variable has no name.";
+    }
+    if (PASSWORD_VARS.has(key)) {
+      return `${key} is a password: keep it in the vault of ${groupName || "the group"}, not in the inventory.`;
+    }
+    return VAR_NAME.test(key) ? null : `"${key}" is not a valid variable name.`;
+  }
+
+  /** Everything the page would refuse in the draft. @param {InventoryContext} ctx @returns {string[]} */
+  function draftProblems(ctx) {
+    if (!ctx.draft) {
+      return [];
+    }
+    /** @type {string[]} */
+    const problems = [];
+    const counts = nameCounts(ctx);
+    for (const group of [...ctx.serverGroups, ...ctx.services]) {
+      if (group.readOnly) {
+        continue;
+      }
+      const label = group.name || "a new group";
+      const invalid = group.added ? groupNameProblem(group.name, counts) : null;
+      if (invalid) {
+        problems.push(invalid);
+      }
+      for (const [key] of group.vars) {
+        const problem = varProblem(key, group.name);
+        if (problem) {
+          problems.push(`Group ${label}: ${problem}`);
+        }
+      }
+      group.hosts.forEach((host, index) => {
+        const problem = hostNameProblem(group, index);
+        if (problem) {
+          problems.push(`Group ${label}: ${problem}`);
+        }
+        for (const [key] of host.vars) {
+          const varIssue = varProblem(key, group.name);
+          if (varIssue) {
+            problems.push(`Host ${host.name || "(no name)"} in ${label}: ${varIssue}`);
+          }
+        }
+      });
+    }
+    return [...new Set(problems)];
+  }
+
+  /** @param {string | null} text */
+  function fieldWarning(text) {
+    return text ? h("span", { class: "field-warning", role: "alert" }, icon("warning"), text) : null;
+  }
+
+  /**
+   * A text input bound to the draft. Read-only (not disabled) when editing is
+   * off, so a frozen draft's values can still be selected and copied.
+   *
+   * @param {InventoryContext} ctx
+   * @param {{ key: string, value: string, placeholder?: string, label: string, editable: boolean, mono?: boolean, onInput: (draft: Draft, value: string) => void }} spec
+   */
+  function draftInput(ctx, spec) {
+    return h("input", {
+      type: "text",
+      class: spec.mono === false ? "" : "mono",
+      value: spec.value,
+      placeholder: spec.placeholder || undefined,
+      "aria-label": spec.label,
+      spellcheck: "false",
+      readonly: !spec.editable,
+      "data-key": spec.key,
+      oninput: (/** @type {Event} */ e) => {
+        const value = /** @type {HTMLInputElement} */ (e.target).value;
+        mutate(ctx, (draft) => spec.onInput(draft, value));
+      },
+    });
+  }
+
+  /**
+   * @param {InventoryContext} ctx @param {"serverGroups" | "services"} kind @param {number} index
+   * @returns {(draft: Draft) => Group | undefined}
+   */
+  function groupIn(ctx, kind, index) {
+    return (draft) => draft[kind][index];
+  }
+
+  /**
+   * Key/value rows. `skip` hides keys shown elsewhere (the SSH fields); the
+   * row indices stay those of the full list.
+   *
+   * @param {InventoryContext} ctx
+   * @param {(draft: Draft) => Var[] | undefined} varsOf
+   * @param {Var[]} vars
+   * @param {{ editable: boolean, keyBase: string, groupName: string, skip?: Set<string>, title: string }} spec
+   */
+  function varsEditor(ctx, varsOf, vars, spec) {
+    const rows = vars.map(([key, value], index) =>
+      spec.skip && spec.skip.has(key)
+        ? null
+        : h(
+            "div",
+            { class: "var-row" },
+            draftInput(ctx, {
+              key: `${spec.keyBase}:k:${index}`,
+              value: key,
+              placeholder: "name",
+              label: "Variable name",
+              editable: spec.editable,
+              onInput: (draft, text) => {
+                const entry = (varsOf(draft) || [])[index];
+                if (entry) {
+                  entry[0] = text;
+                }
+              },
+            }),
+            h("span", { class: "muted" }, "="),
+            draftInput(ctx, {
+              key: `${spec.keyBase}:v:${index}`,
+              value,
+              placeholder: "value",
+              label: `Value of ${key || "the variable"}`,
+              editable: spec.editable,
+              onInput: (draft, text) => {
+                const entry = (varsOf(draft) || [])[index];
+                if (entry) {
+                  entry[1] = text;
+                }
+              },
+            }),
+            spec.editable
+              ? h(
+                  "button",
+                  {
+                    class: "icon-button",
+                    title: `Remove ${key || "this variable"}`,
+                    "aria-label": `Remove ${key || "this variable"}`,
+                    onclick: () => mutate(ctx, (draft) => (varsOf(draft) || []).splice(index, 1)),
+                  },
+                  icon("close"),
+                )
+              : null,
+            fieldWarning(varProblem(key, spec.groupName)),
+          ),
+    );
+    const shown = rows.filter(Boolean);
+    return h(
+      "div",
+      { class: "vars-editor" },
+      h("div", { class: "sub-head" }, spec.title),
+      shown.length ? shown : h("p", { class: "note" }, "None."),
+      spec.editable
+        ? h(
+            "button",
+            {
+              class: "link",
+              "data-key": `${spec.keyBase}:add`,
+              onclick: () => mutate(ctx, (draft) => (varsOf(draft) || []).push(["", ""])),
+            },
+            icon("add"),
+            "Variable",
+          )
+        : null,
+    );
+  }
+
+  /**
+   * The Vault button of a group: only when a playbook-folder service of the
+   * same name has a place for a vault.
+   *
+   * @param {InventoryContext} ctx @param {string} name
+   */
+  function vaultButton(ctx, name) {
+    const service = ctx.environment.services.find((/** @type {any} */ s) => s.name === name && s.vaultFile);
+    if (!service) {
+      return null;
+    }
+    return h(
+      "button",
+      {
+        class: "icon-button",
+        title: service.hasVault
+          ? `ansible-vault edit ${name}'s vault — the place for passwords`
+          : `ansible-vault create ${name}'s vault — the place for passwords`,
+        "data-key": `inv-vault:${name}`,
+        onclick: () =>
+          vscode.postMessage({
+            type: "vault",
+            folder: ctx.folder.path,
+            environment: ctx.environment.name,
+            service: name,
+            action: service.hasVault ? "edit" : "create",
+          }),
+      },
+      icon(service.hasVault ? "lock" : "add"),
+      h("span", { class: "label" }, "Vault"),
+    );
+  }
+
+  /**
+   * ⋯ with Rename…/Delete… for a group that is in the file, or ✕ for one
+   * added in the draft. Renaming and deleting go through the extension, which
+   * asks and writes at once -- so not over an unsaved draft.
+   *
+   * @param {InventoryContext} ctx @param {"serverGroups" | "services"} kind @param {number} index @param {Group} group
+   */
+  function groupMenu(ctx, kind, index, group) {
+    if (group.readOnly) {
+      return null;
+    }
+    if (group.added) {
+      return h(
+        "button",
+        {
+          class: "icon-button",
+          title: "Remove this new group",
+          "aria-label": "Remove this new group",
+          disabled: !ctx.canEdit,
+          onclick: () =>
+            mutate(ctx, (draft) => {
+              const [removed] = draft[kind].splice(index, 1);
+              if (removed && removed.name) {
+                for (const service of draft.services) {
+                  service.children = service.children.filter((child) => child !== removed.name);
+                }
+              }
+              openGroups.delete(`${ctx.key}\n${kind}\n${index}`);
+            }),
+        },
+        icon("close"),
+      );
+    }
+    const menuKey = `${ctx.key}\n${kind}\n${group.name}`;
+    const blocked = Boolean(ctx.draft);
+    const open = openMenu === menuKey && !blocked;
+    /** @param {"renameGroup" | "deleteGroup"} type */
+    const send = (type) => {
+      openMenu = null;
+      vscode.postMessage({
+        type,
+        folder: ctx.folder.path,
+        environment: ctx.environment.name,
+        hash: ctx.inventory.hash,
+        group: group.name,
+      });
+      render();
+    };
+    return h(
+      "span",
+      { class: "group-menu" },
+      h(
+        "button",
+        {
+          class: "icon-button",
+          title: blocked ? "Save or discard first" : `Rename or delete ${group.name}`,
+          "aria-label": blocked ? `Rename or delete ${group.name}: save or discard first` : `Rename or delete ${group.name}`,
+          "aria-expanded": String(open),
+          "data-key": `inv-menu:${kind}:${group.name}`,
+          disabled: blocked,
+          onclick: () => {
+            openMenu = open ? null : menuKey;
+            render();
+          },
+        },
+        icon("ellipsis"),
+      ),
+      open
+        ? h(
+            "span",
+            { class: "menu", role: "menu" },
+            h("button", { class: "link", role: "menuitem", onclick: () => send("renameGroup") }, icon("edit"), "Rename…"),
+            h("button", { class: "link", role: "menuitem", onclick: () => send("deleteGroup") }, icon("trash"), "Delete…"),
+          )
+        : null,
+    );
+  }
+
+  /**
+   * The name of a group: text, or an input for a group added in the draft.
+   * Renaming an added group carries the services' children along.
+   *
+   * @param {InventoryContext} ctx @param {"serverGroups" | "services"} kind @param {number} index @param {Group} group @param {Map<string, number>} counts
+   */
+  function groupName(ctx, kind, index, group, counts) {
+    if (!group.added) {
+      return h("code", { class: "group-name" }, group.name);
+    }
+    return h(
+      "span",
+      { class: "group-name-edit" },
+      draftInput(ctx, {
+        key: `inv:${kind}:${index}:name`,
+        value: group.name,
+        placeholder: kind === "services" ? "service name" : "group name",
+        label: kind === "services" ? "Name of the new service" : "Name of the new server group",
+        editable: ctx.canEdit,
+        onInput: (draft, text) => {
+          const target = draft[kind][index];
+          if (!target) {
+            return;
+          }
+          const before = target.name;
+          target.name = text;
+          if (before) {
+            for (const service of draft.services) {
+              service.children = service.children.map((child) => (child === before ? text : child));
+            }
+          }
+        },
+      }),
+      fieldWarning(groupNameProblem(group.name, counts)),
+    );
+  }
+
+  const READ_ONLY_HINT = "part of a manual group — move it into the block to keep comments";
+
+  /** @param {InventoryContext} ctx */
+  function servicesSection(ctx) {
+    const counts = nameCounts(ctx);
+    const manualGroups = /** @type {string[]} */ (ctx.inventory.manualGroups || []);
+    const taken = new Set([...ctx.serverGroups, ...ctx.services].map((g) => g.name));
+    const unlisted = /** @type {string[]} */ (ctx.inventory.unlisted || []).filter((name) => !taken.has(name));
+
+    const rows = ctx.services.map((service, index) => {
+      const editable = ctx.canEdit && !service.readOnly;
+      const choices = [
+        ...new Set([
+          ...ctx.serverGroups.map((g) => g.name),
+          ...ctx.services.filter((_, other) => other !== index).map((g) => g.name),
+          ...manualGroups,
+          // A child that is no group any more stays visible, to be unticked.
+          ...service.children,
+        ]),
+      ].filter((name) => name && name !== service.name);
+      const members = service.children;
+      return h(
+        "div",
+        { class: `inv-row service-row ${service.readOnly ? "read-only" : ""}` },
+        h(
+          "div",
+          { class: "inv-row-head" },
+          groupName(ctx, "services", index, service, counts),
+          h("span", { class: "spacer" }),
+          vaultButton(ctx, service.name),
+          groupMenu(ctx, "services", index, service),
+        ),
+        h(
+          "div",
+          { class: "children", role: "group", "aria-label": `Groups in ${service.name || "the new service"}` },
+          choices.length
+            ? choices.map((choice) =>
+                h(
+                  "label",
+                  { class: `child ${members.includes(choice) ? "on" : ""}` },
+                  h("input", {
+                    type: "checkbox",
+                    checked: members.includes(choice),
+                    disabled: !editable,
+                    "data-key": `inv:services:${index}:child:${choice}`,
+                    onchange: (/** @type {Event} */ e) => {
+                      const on = /** @type {HTMLInputElement} */ (e.target).checked;
+                      mutate(ctx, (draft) => {
+                        const target = draft.services[index];
+                        if (!target) {
+                          return;
+                        }
+                        target.children = on
+                          ? [...target.children.filter((c) => c !== choice), choice]
+                          : target.children.filter((c) => c !== choice);
+                      });
+                    },
+                  }),
+                  choice,
+                ),
+              )
+            : h("span", { class: "note" }, "No groups to choose from yet."),
+        ),
+        service.hosts.length || service.vars.length
+          ? h(
+              "p",
+              { class: "note" },
+              [
+                service.hosts.length ? `${service.hosts.length} host${service.hosts.length === 1 ? "" : "s"}` : "",
+                service.vars.length ? `${service.vars.length} variable${service.vars.length === 1 ? "" : "s"}` : "",
+              ]
+                .filter(Boolean)
+                .join(" and "),
+              " of its own — kept as they are; edit them in the file.",
+            )
+          : null,
+        service.readOnly ? h("p", { class: "note" }, icon("lock"), ` ${READ_ONLY_HINT}`) : null,
+      );
+    });
+
+    return h(
+      "section",
+      { class: "inv-section" },
+      h(
+        "div",
+        { class: "inv-section-head" },
+        h("h2", null, "Services (access control)"),
+        h("span", { class: "spacer" }),
+        ctx.canEdit
+          ? h(
+              "button",
+              {
+                class: "icon-button",
+                "data-key": "inv-add-service",
+                onclick: () =>
+                  mutate(ctx, (draft) => {
+                    draft.services.push({ name: "", children: [], hosts: [], vars: [], readOnly: false, added: true });
+                  }),
+              },
+              icon("add"),
+              h("span", { class: "label" }, "Service"),
+            )
+          : null,
+      ),
+      rows.length ? rows : h("p", { class: "note" }, "No services in the inventory yet."),
+      unlisted.map((name) =>
+        h(
+          "div",
+          { class: "inv-row unlisted" },
+          h("code", { class: "group-name" }, name),
+          h("span", { class: "note" }, "not in inventory —"),
+          h(
+            "button",
+            {
+              class: "link",
+              disabled: !ctx.canEdit,
+              "data-key": `inv-unlisted:${name}`,
+              onclick: () =>
+                mutate(ctx, (draft) => {
+                  draft.services.push({ name, children: [], hosts: [], vars: [], readOnly: false, added: true });
+                }),
+            },
+            icon("add"),
+            "Add",
+          ),
+        ),
+      ),
+    );
+  }
+
+  /**
+   * One host: a summary line, and the form when it is open.
+   *
+   * @param {InventoryContext} ctx @param {number} groupIndex @param {Group} group @param {number} index @param {boolean} editable
+   */
+  function hostView(ctx, groupIndex, group, index, editable) {
+    const host = /** @type {Host} */ (group.hosts[index]);
+    const formKey = `${ctx.key}\nserverGroups\n${groupIndex}\n${index}`;
+    const open = openHosts.has(formKey);
+    const keyBase = `inv:serverGroups:${groupIndex}:host:${index}`;
+    const hostOf = (/** @type {Draft} */ draft) => {
+      const target = draft.serverGroups[groupIndex];
+      return target ? target.hosts[index] : undefined;
+    };
+    const first = group.hosts[0];
+    const user = getVar(host.vars, "ansible_user");
+    const key = getVar(host.vars, "ansible_ssh_private_key_file");
+    const problem = hostNameProblem(group, index);
+    const varIssue = host.vars.some(([k]) => varProblem(k, group.name));
+
+    const summary = h(
+      "div",
+      { class: `host-line ${problem || varIssue ? "invalid" : ""}` },
+      h("code", { class: "host-name" }, host.name || "(no name)"),
+      h("span", { class: "muted" }, getVar(host.vars, "ansible_host")),
+      user ? h("span", { class: "muted" }, `user ${user}`) : null,
+      key ? h("span", { class: "muted" }, `key ${key}`) : null,
+      h("span", { class: "spacer" }),
+      h(
+        "button",
+        {
+          class: "icon-button",
+          title: open ? "Close the form" : editable ? `Edit ${host.name}` : `Show ${host.name}`,
+          "aria-expanded": String(open),
+          "data-key": `${keyBase}:toggle`,
+          onclick: () => {
+            if (open) {
+              openHosts.delete(formKey);
+            } else {
+              openHosts.add(formKey);
+            }
+            render();
+          },
+        },
+        icon(open ? "chevron-up" : "edit"),
+      ),
+      editable
+        ? h(
+            "button",
+            {
+              class: "icon-button",
+              title: `Remove ${host.name || "this host"} from ${group.name}`,
+              "aria-label": `Remove ${host.name || "this host"}`,
+              onclick: () =>
+                mutate(ctx, (draft) => {
+                  const target = draft.serverGroups[groupIndex];
+                  if (target) {
+                    target.hosts.splice(index, 1);
+                  }
+                  // The open forms are by index; the ones after it moved.
+                  for (const other of [...openHosts]) {
+                    if (other.startsWith(`${ctx.key}\nserverGroups\n${groupIndex}\n`)) {
+                      openHosts.delete(other);
+                    }
+                  }
+                }),
+            },
+            icon("close"),
+          )
+        : null,
+    );
+    if (!open) {
+      return h("div", { class: "host" }, summary);
+    }
+    return h(
+      "div",
+      { class: "host open" },
+      summary,
+      h(
+        "div",
+        { class: "host-form" },
+        h(
+          "label",
+          { class: "form-field" },
+          h("span", { class: "form-label" }, "name"),
+          draftInput(ctx, {
+            key: `${keyBase}:name`,
+            value: host.name,
+            placeholder: "inventory hostname",
+            label: "Host name",
+            editable,
+            onInput: (draft, text) => {
+              const target = hostOf(draft);
+              if (target) {
+                target.name = text;
+              }
+            },
+          }),
+          fieldWarning(problem),
+        ),
+        SSH_FIELDS.map((field) =>
+          h(
+            "label",
+            { class: "form-field" },
+            h("span", { class: "form-label" }, field),
+            draftInput(ctx, {
+              key: `${keyBase}:ssh:${field}`,
+              value: getVar(host.vars, field),
+              placeholder: first ? getVar(first.vars, field) : "",
+              label: field,
+              editable,
+              onInput: (draft, text) => {
+                const target = hostOf(draft);
+                if (target) {
+                  setVar(target.vars, field, text);
+                }
+              },
+            }),
+          ),
+        ),
+        varsEditor(
+          ctx,
+          (draft) => {
+            const target = hostOf(draft);
+            return target ? target.vars : undefined;
+          },
+          host.vars,
+          { editable, keyBase: `${keyBase}:var`, groupName: group.name, skip: SSH_FIELD_SET, title: "Other variables" },
+        ),
+      ),
+    );
+  }
+
+  /** @param {InventoryContext} ctx */
+  function serverGroupsSection(ctx) {
+    const counts = nameCounts(ctx);
+    const groups = ctx.serverGroups.map((group, index) => {
+      const openKey = `${ctx.key}\nserverGroups\n${index}`;
+      const open = openGroups.has(openKey);
+      const editable = ctx.canEdit && !group.readOnly;
+      const hostCount = `${group.hosts.length} host${group.hosts.length === 1 ? "" : "s"}`;
+      return h(
+        "div",
+        { class: `inv-group ${group.readOnly ? "read-only" : ""}` },
+        h(
+          "div",
+          { class: "inv-row-head" },
+          h(
+            "button",
+            {
+              class: "group-toggle",
+              "aria-expanded": String(open),
+              "aria-label": `${open ? "Collapse" : "Expand"} ${group.name || "the new group"}`,
+              "data-key": `inv:serverGroups:${index}:toggle`,
+              onclick: () => {
+                if (open) {
+                  openGroups.delete(openKey);
+                } else {
+                  openGroups.add(openKey);
+                }
+                render();
+              },
+            },
+            icon(open ? "chevron-down" : "chevron-right"),
+          ),
+          groupName(ctx, "serverGroups", index, group, counts),
+          h("span", { class: "muted" }, hostCount),
+          group.readOnly ? h("span", { class: "badge" }, icon("lock"), "read-only") : null,
+          h("span", { class: "spacer" }),
+          vaultButton(ctx, group.name),
+          groupMenu(ctx, "serverGroups", index, group),
+        ),
+        group.readOnly ? h("p", { class: "note" }, READ_ONLY_HINT) : null,
+        open
+          ? h(
+              "div",
+              { class: "inv-group-body" },
+              group.hosts.length
+                ? group.hosts.map((_, hostIndex) => hostView(ctx, index, group, hostIndex, editable))
+                : h("p", { class: "note" }, "No hosts."),
+              editable
+                ? h(
+                    "button",
+                    {
+                      class: "link",
+                      "data-key": `inv:serverGroups:${index}:add-host`,
+                      onclick: () =>
+                        mutate(ctx, (draft) => {
+                          const target = draft.serverGroups[index];
+                          if (target) {
+                            target.hosts.push({ name: "", vars: [] });
+                            openHosts.add(`${ctx.key}\nserverGroups\n${index}\n${target.hosts.length - 1}`);
+                          }
+                        }),
+                    },
+                    icon("add"),
+                    "Host",
+                  )
+                : null,
+              varsEditor(
+                ctx,
+                (draft) => {
+                  const target = groupIn(ctx, "serverGroups", index)(draft);
+                  return target ? target.vars : undefined;
+                },
+                group.vars,
+                { editable, keyBase: `inv:serverGroups:${index}:var`, groupName: group.name, title: "Group variables" },
+              ),
+            )
+          : null,
+      );
+    });
+
+    return h(
+      "section",
+      { class: "inv-section" },
+      h(
+        "div",
+        { class: "inv-section-head" },
+        h("h2", null, "Server groups"),
+        ctx.draft && !ctx.frozen ? h("span", { class: "note" }, "Rename and delete: save or discard first.") : null,
+        h("span", { class: "spacer" }),
+        ctx.canEdit
+          ? h(
+              "button",
+              {
+                class: "icon-button",
+                "data-key": "inv-add-server-group",
+                onclick: () =>
+                  mutate(ctx, (draft) => {
+                    draft.serverGroups.push({ name: "", children: [], hosts: [], vars: [], readOnly: false, added: true });
+                    openGroups.add(`${ctx.key}\nserverGroups\n${draft.serverGroups.length - 1}`);
+                  }),
+              },
+              icon("add"),
+              h("span", { class: "label" }, "Server group"),
+            )
+          : null,
+      ),
+      groups.length ? groups : h("p", { class: "note" }, "No server groups in the inventory yet."),
+    );
+  }
+
+  /** @param {InventoryContext} ctx */
+  function manualSection(ctx) {
+    const blocks = /** @type {{ line: number, preview: string }[]} */ (ctx.inventory.manual || []);
+    if (!blocks.length) {
+      return null;
+    }
+    return h(
+      "section",
+      { class: "inv-section" },
+      h("div", { class: "inv-section-head" }, h("h2", null, "Manual sections")),
+      blocks.map((block) =>
+        h(
+          "div",
+          { class: "inv-row manual" },
+          h("span", { class: "muted" }, `line ${block.line}`),
+          h("code", { class: "manual-preview" }, block.preview || "(empty)"),
+          h("span", { class: "badge" }, icon("lock"), "read-only"),
+          h("span", { class: "spacer" }),
+          h(
+            "button",
+            {
+              class: "link",
+              "data-key": `inv-open:${block.line}`,
+              onclick: () =>
+                vscode.postMessage({
+                  type: "openInventory",
+                  folder: ctx.folder.path,
+                  environment: ctx.environment.name,
+                  line: block.line,
+                }),
+            },
+            icon("go-to-file"),
+            "Open in editor",
+          ),
+        ),
+      ),
+    );
+  }
+
+  /** Directories of the folder that could get an inventory. @param {any} folder */
+  function candidatesNote(folder) {
+    const candidates = /** @type {{ name: string, dir: string }[]} */ (folder.candidates || []);
+    if (!candidates.length) {
+      return null;
+    }
+    return h(
+      "div",
+      { class: "candidates" },
+      candidates.map((candidate) =>
+        h(
+          "div",
+          { class: "inv-row candidate" },
+          icon("info"),
+          h("span", null, h("code", null, candidate.name), " has no inventory file"),
+          h(
+            "button",
+            {
+              class: "link",
+              title: candidate.dir,
+              "data-key": `inv-create:${candidate.name}`,
+              onclick: () => vscode.postMessage({ type: "createInventory", folder: folder.path, candidate: candidate.name }),
+            },
+            icon("add"),
+            "Create inventory",
+          ),
+        ),
+      ),
+    );
+  }
+
+  /** @param {InventoryContext} ctx */
+  function inventoryPane(ctx) {
+    const file = baseName(ctx.environment.inventoryFile);
+    const showGroups = ctx.inventory.editable || ctx.draft;
+    return h(
+      "section",
+      { class: "inventory", "data-scroll": "inventory" },
+      candidatesNote(ctx.folder),
+      h(
+        "p",
+        { class: "inventory-file" },
+        icon("file"),
+        h("code", null, file),
+        h(
+          "button",
+          {
+            class: "link",
+            title: ctx.environment.inventoryFile,
+            "data-key": "inv-open-file",
+            onclick: () =>
+              vscode.postMessage({ type: "openInventory", folder: ctx.folder.path, environment: ctx.environment.name, line: 1 }),
+          },
+          icon("go-to-file"),
+          "Open in editor",
+        ),
+      ),
+      ctx.frozen
+        ? h(
+            "div",
+            { class: "inv-banner", role: "status" },
+            icon("warning"),
+            h("strong", null, `${file} changed on disk`),
+            " — your edits are kept to copy from, but cannot be saved over the new file. Discard loads it.",
+          )
+        : null,
+      !ctx.inventory.editable
+        ? h("p", { class: "note warning" }, icon("info"), ` ${ctx.inventory.reason || "This inventory cannot be edited here."}`)
+        : null,
+      showGroups ? [servicesSection(ctx), serverGroupsSection(ctx), manualSection(ctx)] : null,
+    );
+  }
+
+  /** @param {InventoryContext} ctx */
+  function saveBar(ctx) {
+    const problems = draftProblems(ctx);
+    const warnings = /** @type {string[]} */ (ctx.inventory.warnings || []);
+    const error = inventoryErrors.get(ctx.key);
+    const canSave = Boolean(ctx.draft) && ctx.canEdit && !problems.length;
+    return h(
+      "footer",
+      { class: `runbar savebar ${ctx.environment.isProduction ? "production" : ""}` },
+      warnings.length || problems.length
+        ? h(
+            "ul",
+            { class: "inv-warnings" },
+            warnings.map((text) => h("li", null, icon("warning"), text)),
+            problems.map((text) => h("li", { class: "problem" }, icon("error"), text)),
+          )
+        : null,
+      h(
+        "div",
+        { class: "runbar-line" },
+        error ? h("span", { class: "error" }, icon("error"), error) : null,
+        h("span", { class: "spacer" }),
+        ctx.draft ? h("span", { class: "unsaved" }, unsavedMark(), " unsaved changes") : null,
+        h(
+          "button",
+          {
+            class: "icon-button",
+            "data-key": "inv-discard",
+            disabled: !ctx.draft,
+            title: ctx.frozen ? `Drop the edits and load ${baseName(ctx.environment.inventoryFile)} as it is now` : "Drop the edits",
+            onclick: () => {
+              state.drafts.delete(ctx.key);
+              inventoryErrors.delete(ctx.key);
+              openMenu = null;
+              persist();
+              render();
+            },
+          },
+          icon("discard"),
+          h("span", { class: "label" }, "Discard"),
+        ),
+        h(
+          "button",
+          {
+            class: `run ${ctx.environment.isProduction ? "production" : ""}`,
+            "data-key": "inv-save",
+            disabled: !canSave,
+            title: problems.length ? "Fix the problems listed above first" : undefined,
+            onclick: () => {
+              const draft = ctx.draft;
+              if (!draft) {
+                return;
+              }
+              inventoryErrors.delete(ctx.key);
+              // Read-only groups are taken from the file by the extension.
+              const plain = (/** @type {Group} */ g) => ({
+                name: g.name,
+                hosts: g.hosts.map((host) => ({ name: host.name, vars: host.vars.map((v) => [v[0], v[1]]) })),
+                vars: g.vars.map((v) => [v[0], v[1]]),
+              });
+              vscode.postMessage({
+                type: "saveInventory",
+                folder: ctx.folder.path,
+                environment: ctx.environment.name,
+                hash: draft.hash,
+                serverGroups: draft.serverGroups.filter((g) => !g.readOnly).map(plain),
+                services: draft.services
+                  .filter((g) => !g.readOnly)
+                  .map((g) => ({ ...plain(g), children: [...g.children] })),
+              });
+              render();
+            },
+          },
+          icon("save"),
+          `Save ${ctx.environment.name}`,
+        ),
+      ),
+    );
+  }
+
   function render() {
     const active = /** @type {HTMLElement | null} */ (document.activeElement);
     const focusKey = active && active.dataset ? active.dataset.key : undefined;
@@ -1503,15 +2684,21 @@
               h("span", { class: "label" }, "New service…"),
             ),
           ),
+          candidatesNote(folder),
         ),
       ];
+    }
+    const banner = environment.isProduction
+      ? h("div", { class: "banner", role: "status" }, icon("warning"), h("strong", null, "production"), " — runs here ask for confirmation before they start.")
+      : h("div");
+    if (state.tab === "inventory") {
+      const ctx = inventoryContext(folder, environment);
+      return [topbar(folder, environment), banner, inventoryPane(ctx), saveBar(ctx)];
     }
     const service = currentService(environment);
     return [
       topbar(folder, environment),
-      environment.isProduction
-        ? h("div", { class: "banner", role: "status" }, icon("warning"), h("strong", null, "production"), " — runs here ask for confirmation before they start.")
-        : h("div"),
+      banner,
       h("main", { class: "layout" }, servicesPane(environment), detailPane(folder, environment, service)),
       runbar(environment),
     ];
@@ -1550,6 +2737,7 @@
       model = message.model;
       setupTags = message.setupTags || {};
       settings = Array.isArray(message.settings) ? message.settings : [];
+      pruneDrafts();
       render();
       requestPreview();
       // Outlines are re-read on a model refresh: a file changed on disk is
@@ -1566,6 +2754,20 @@
       render();
     } else if (message.type === "preview") {
       preview = message;
+      render();
+    } else if (message.type === "inventoryResult") {
+      if (typeof message.folder !== "string" || typeof message.environment !== "string") {
+        return;
+      }
+      const key = `${message.folder}\n${message.environment}`;
+      if (message.error === null) {
+        // Saved, or nothing to save: the file on disk is the truth again.
+        state.drafts.delete(key);
+        inventoryErrors.delete(key);
+        persist();
+      } else if (typeof message.error === "string") {
+        inventoryErrors.set(key, message.error);
+      }
       render();
     } else if (message.type === "settingResult") {
       if (message.error) {
