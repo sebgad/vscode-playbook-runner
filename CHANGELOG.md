@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+* *Get started* writes `localhost ansible_connection=local` without an
+  `ansible_python_interpreter` line; Ansible finds the interpreter itself.
 * **No vault, no passphrase prompt.** A playbook run against an environment
   with nothing encrypted no longer asks for a vault password; it used to, on
   every run, whenever no password file was configured. Vault content outside
