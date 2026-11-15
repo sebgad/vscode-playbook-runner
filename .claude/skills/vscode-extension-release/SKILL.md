@@ -31,15 +31,19 @@ repository, `vscode-playbook-runner`.
 6. **Check what ships**: `npx vsce ls --no-dependencies` lists the files the
    package holds — no `test/`, `docs/`, `CLAUDE.md` or `.claude/`.
 7. **Publish — only when the user says so.** It is public and a version number
-   can never be reused, even after unpublishing. Publish the file just built,
-   so both registries get the same bytes:
+   can never be reused, even after unpublishing. The VS Code Marketplace is
+   published by `.github/workflows/publish.yml` (Trusted Publishing over OIDC,
+   no token): commit the release, then push a tag naming the version.
    ```bash
-   npx vsce publish --packagePath dist/playbook-runner-<version>.vsix   # token: VSCE_PAT
-   npx ovsx publish dist/playbook-runner-<version>.vsix                 # token: OVSX_PAT
+   git tag v<version> && git push origin main v<version>
    ```
-   The tokens are the user's; never ask for them in chat or write them to a
-   file — they set `VSCE_PAT` / `OVSX_PAT` in their shell. The first Open VSX
-   publish needs the namespace once: `npx ovsx create-namespace sebgad`.
+   The workflow refuses a tag that doesn't match `package.json`, runs
+   `npm run check`, packages, and runs `vsce publish --oidc --packagePath`.
+   It can also be started by hand from the Actions tab (*workflow_dispatch*).
+   `--oidc` needs `@vscode/vsce` 4.x — don't downgrade it.
+   Open VSX is not published for now (the user's choice); if that changes,
+   it needs an `OVSX_PAT` repository secret and, once, `npx ovsx
+   create-namespace sebgad`. Tokens are the user's; never ask for them in chat.
 8. **Report**: the `.vsix` path and, if published, the Marketplace and Open
    VSX listing URLs. Installing into the user's editor is their call — offer
    it, do not do it unasked.

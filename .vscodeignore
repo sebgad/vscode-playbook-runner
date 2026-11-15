@@ -1,5 +1,6 @@
 # Everything that is development-only. What ships is extension.js, src/,
 # media/, ansible/, package.json, the README, the CHANGELOG and the LICENSE.
+.github/**
 .vscode/**
 .claude/**
 docs/**

@@ -1,0 +1,40 @@
+name: Publish
+
+# Publishes to the VS Code Marketplace with Trusted Publishing (OIDC) — no
+# VSCE_PAT secret. Runs when a version tag is pushed (git tag v0.5.1 && git
+# push origin v0.5.1), or by hand from the Actions tab.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+
+      # A tag must name the version package.json carries — a Marketplace
+      # version number can never be reused.
+      - name: Check tag matches package.json version
+        if: github.ref_type == 'tag'
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${version}"
+            exit 1
+          fi
+
+      - run: npm run check
+      - run: npm run package
+      - name: Publish to the VS Code Marketplace
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          npx vsce publish --oidc --packagePath "dist/playbook-runner-${version}.vsix"
