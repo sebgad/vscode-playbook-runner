@@ -490,6 +490,19 @@ const HOST_NAME = /^[A-Za-z0-9_.\-[\]:]+$/;
 const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
+ * Why `name` cannot be a group name, or null when it can. The one copy of the
+ * rule: validateInventory, planGroupRename and the rename input box use it.
+ *
+ * @param {string} name
+ * @returns {string | null}
+ */
+function validateGroupName(name) {
+  return GROUP_NAME.test(name)
+    ? null
+    : `"${name}" is not a valid group name. Ansible group names allow letters, digits and _, and do not start with a digit.`;
+}
+
+/**
  * Everything that stops an inventory from being saved; [] means savable.
  *
  * @param {Inventory} inventory
@@ -548,8 +561,9 @@ function validateInventory(inventory) {
     if (group.readOnly) {
       continue;
     }
-    if (!GROUP_NAME.test(group.name)) {
-      errors.push(`"${group.name}" is not a valid group name. Ansible group names allow letters, digits and _.`);
+    const invalid = validateGroupName(group.name);
+    if (invalid) {
+      errors.push(invalid);
     }
     checkVars(group.name, group.vars, `Group ${group.name}`);
     for (const host of group.hosts) {
@@ -915,8 +929,9 @@ function planGroupRename(root, settings, environment, diskText, from, to) {
     throw new Error("The name is unchanged.");
   }
   const inventory = parseForGroupChange(diskText, from, "rename");
-  if (!GROUP_NAME.test(to)) {
-    throw new Error(`"${to}" is not a valid group name (letters, digits and underscores; not starting with a digit).`);
+  const invalid = validateGroupName(to);
+  if (invalid) {
+    throw new Error(invalid);
   }
   const taken = [...inventory.serverGroups, ...inventory.services].some((item) => item.name === to);
   if (taken || inventory.manualGroups.includes(to)) {
@@ -1067,5 +1082,6 @@ module.exports = {
   planGroupRename,
   playbooksNamingGroup,
   serializeInventory,
+  validateGroupName,
   validateInventory,
 };

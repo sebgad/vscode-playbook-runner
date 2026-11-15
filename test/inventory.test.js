@@ -16,6 +16,7 @@ const {
   newInventoryText,
   parseInventory,
   serializeInventory,
+  validateGroupName,
   validateInventory,
   applyGroupRename,
   planGroupDelete,
@@ -304,6 +305,25 @@ describe("validateInventory", () => {
 
   it("reports the parse error", () => {
     assert.equal(errors(`${MANUAL_BEGIN}\n[a]\n`).length, 1);
+  });
+});
+
+describe("validateGroupName", () => {
+  it("accepts letters, digits and underscores not starting with a digit", () => {
+    assert.equal(validateGroupName("podman_servers"), null);
+    assert.equal(validateGroupName("_x1"), null);
+  });
+
+  it("refuses anything else, with the same message validateInventory gives", () => {
+    for (const name of ["", "1st", "a-b", "a b", "a:b", "ä"]) {
+      const reason = validateGroupName(name);
+      assert.ok(reason, name);
+      const inventory = parseInventory("[ok]\nhost1\n");
+      const group = inventory.serverGroups[0];
+      assert.ok(group);
+      group.name = name;
+      assert.ok(validateInventory(inventory).includes(reason), name);
+    }
   });
 });
 

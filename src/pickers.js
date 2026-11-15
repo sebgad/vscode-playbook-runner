@@ -244,14 +244,16 @@ async function pickEnvironmentSource(environments) {
 }
 
 /**
- * The last question before an environment is removed: its name, typed out.
+ * The last question before an environment or an inventory group is removed:
+ * its name, typed out.
  *
  * @param {string} name
+ * @param {string} [title]
  * @returns {Promise<boolean>}
  */
-async function confirmByName(name) {
+async function confirmByName(name, title = `Delete environment ${name}`) {
   const typed = await vscode.window.showInputBox({
-    title: `Delete environment ${name}`,
+    title,
     prompt: `Type ${name} to confirm`,
     ignoreFocusOut: true,
     validateInput: (value) => (value === name ? undefined : `Type ${name} exactly, or press Escape to cancel.`),
