@@ -36,6 +36,7 @@ const { findEnvironments, findPlaybooks, isDirectory } = require("./discovery");
  * @property {string[]} warnings
  * @property {string | null} error
  * @property {"\n" | "\r\n"} eol
+ * @property {boolean} bom The file starts with a UTF-8 byte order mark.
  */
 
 const MANUAL_BEGIN = "# playbook-runner: manual begin";
@@ -131,17 +132,21 @@ function unquote(value) {
 }
 
 /**
- * `key=value` split on the first `=`; null without one.
+ * `key=value` split on the first `=`; null without one. A host-line value is
+ * unquoted shell-style; a vars-section value is kept as written, since Ansible
+ * evaluates the rest of the line itself.
  *
  * @param {string} text
+ * @param {boolean} [verbatim]
  * @returns {Var | null}
  */
-function splitVar(text) {
+function splitVar(text, verbatim = false) {
   const at = text.indexOf("=");
   if (at <= 0) {
     return null;
   }
-  return [text.slice(0, at).trim(), unquote(text.slice(at + 1).trim())];
+  const value = text.slice(at + 1).trim();
+  return [text.slice(0, at).trim(), verbatim ? value : unquote(value)];
 }
 
 /**
@@ -164,7 +169,11 @@ function setVar(vars, entry) {
  * @returns {Inventory}
  */
 function parseInventory(text) {
-  const source = String(text || "");
+  let source = String(text || "");
+  const bom = source.startsWith("\uFEFF");
+  if (bom) {
+    source = source.slice(1);
+  }
   const eol = source.includes("\r\n") ? "\r\n" : "\n";
   const lines = source.split(/\r?\n/);
   if (lines[lines.length - 1] === "") {
@@ -242,8 +251,14 @@ function parseInventory(text) {
       continue;
     }
 
-    const { text: content, comment } = stripComment(raw);
-    const header = /^\[([^\]]+)\]$/.exec(content);
+    // In a vars section only a whole line is a comment: Ansible keeps a
+    // trailing `# ...` or `; ...` as part of the value.
+    const trimmed = raw.trim();
+    const stripped = stripComment(raw);
+    const header = /^\[([^\]]+)\]$/.exec(stripped.text);
+    const verbatim = !block && !header && context.kind === "vars";
+    const content = verbatim ? (/^[#;]/.test(trimmed) ? "" : trimmed) : stripped.text;
+    const comment = verbatim ? /^[#;]/.test(trimmed) : stripped.comment;
     if (block) {
       block.lines.push(raw);
       if (header) {
@@ -287,7 +302,7 @@ function parseInventory(text) {
     const record = context.group || group("ungrouped");
     context.group = record;
     if (context.kind === "vars") {
-      const entry = splitVar(content);
+      const entry = splitVar(content, true);
       if (!entry) {
         unreadable++;
       } else {
@@ -383,6 +398,7 @@ function parseInventory(text) {
     warnings,
     error,
     eol,
+    bom,
   };
 }
 
@@ -392,13 +408,9 @@ function parseInventory(text) {
  * @param {string} value
  */
 function quoteValue(value) {
-  const first = value.charAt(0);
-  if (value.length >= 2 && (first === "'" || first === '"') && value.endsWith(first)) {
-    // Already wrapped (kept so a string stays a string): write as is, unless
-    // the quote char also occurs unescaped inside.
-    if (!new RegExp(`(?<!\\\\)${first}`).test(value.slice(1, -1))) {
-      return value;
-    }
+  // Already wrapped (kept so a string stays a string): write as is.
+  if (isWrapped(value)) {
+    return value;
   }
   if (!/[\s'"#;]/.test(value)) {
     return value;
@@ -406,14 +418,35 @@ function quoteValue(value) {
   return value.includes("'") ? `"${value}"` : `'${value}'`;
 }
 
-/** @param {Var} entry */
-function varText(entry) {
+/**
+ * Whether a host-line value is written as is: already wrapped in quotes that
+ * it does not contain unescaped inside.
+ *
+ * @param {string} value
+ */
+function isWrapped(value) {
+  const first = value.charAt(0);
+  return (
+    value.length >= 2 &&
+    (first === "'" || first === '"') &&
+    value.endsWith(first) &&
+    !new RegExp(`(?<!\\\\)${first}`).test(value.slice(1, -1))
+  );
+}
+
+/** A host-line var. @param {Var} entry */
+function hostVarText(entry) {
   return `${entry[0]}=${quoteValue(entry[1])}`;
+}
+
+/** A vars-section line: verbatim, Ansible evaluates the value. @param {Var} entry */
+function sectionVarText(entry) {
+  return `${entry[0]}=${entry[1]}`;
 }
 
 /** @param {Host} host */
 function hostLine(host) {
-  return [host.name, ...host.vars.map(varText)].join(" ");
+  return [host.name, ...host.vars.map(hostVarText)].join(" ");
 }
 
 /**
@@ -430,13 +463,19 @@ function serializeInventory(inventory) {
   const add = (header, body) => sections.push({ header, lines: [`[${header}]`, ...body] });
 
   for (const group of inventory.serverGroups) {
-    if ((group.name !== "all" || group.hosts.length > 0) && (group.hosts.length > 0 || group.vars.length === 0)) {
+    // `[g:vars]` without `[g]` is refused by Ansible, so an editable group
+    // always gets its header. `all` exists anyway; a read-only group may have
+    // its `[g]` inside a manual block.
+    const header =
+      group.hosts.length > 0 ||
+      (group.name !== "all" && (!group.readOnly || group.vars.length === 0));
+    if (header) {
       add(group.name, group.hosts.map(hostLine));
     }
   }
   for (const group of inventory.serverGroups) {
     if (group.vars.length > 0) {
-      add(`${group.name}:vars`, group.vars.map(varText));
+      add(`${group.name}:vars`, group.vars.map(sectionVarText));
     }
   }
   for (const service of inventory.services) {
@@ -445,7 +484,7 @@ function serializeInventory(inventory) {
     }
     add(`${service.name}:children`, service.children);
     if (service.vars.length > 0) {
-      add(`${service.name}:vars`, service.vars.map(varText));
+      add(`${service.name}:vars`, service.vars.map(sectionVarText));
     }
   }
 
@@ -468,9 +507,9 @@ function serializeInventory(inventory) {
     chunks.push(section.lines.join("\n"), ...(after.get(section.header) || []));
   }
   if (chunks.length === 0) {
-    return "";
+    return inventory.bom ? "\uFEFF" : "";
   }
-  return `${chunks.join("\n\n")}\n`.replace(/\n/g, inventory.eol);
+  return `${inventory.bom ? "\uFEFF" : ""}${chunks.join("\n\n")}\n`.replace(/\n/g, inventory.eol);
 }
 
 /** @type {ReadonlySet<string>} */
@@ -580,6 +619,13 @@ function validateInventory(inventory) {
         errors.push(`"${host.name}" is not a valid host name (group ${group.name}).`);
       }
       checkVars(group.name, host.vars, `Host ${host.name} in ${group.name}`);
+      for (const [key, value] of host.vars) {
+        if (value.includes("'") && value.includes('"') && !isWrapped(value)) {
+          errors.push(
+            `Host ${host.name} in ${group.name}: the value of ${key} contains both ' and " quotes, which a host line cannot hold; use one quote kind, or set it in a vars section.`,
+          );
+        }
+      }
       if (host.vars.length > 0) {
         const first = hostVarGroups.get(host.name);
         if (first === undefined) {
@@ -686,6 +732,7 @@ function mergeEdits(disk, edited) {
     warnings: disk.warnings,
     error: disk.error,
     eol: disk.eol,
+    bom: disk.bom,
   };
 }
 
@@ -794,7 +841,8 @@ function describeChanges(before, after) {
   if (
     reordered(nameList(before.serverGroups), nameList(after.serverGroups)) ||
     reordered(nameList(before.services), nameList(after.services))
-  ) {    lines.push("groups reordered");
+  ) {
+    lines.push("groups reordered");
   }
   return lines;
 }

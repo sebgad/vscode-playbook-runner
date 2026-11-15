@@ -201,19 +201,78 @@ describe("parseInventory / serializeInventory", () => {
   });
 
   it("keeps quotes that stop a string from becoming another type", () => {
-    const parsed = parseInventory('[g:vars]\nport="22"\nflag=\'True\'\nlist="[1]"\nname="web"\n');
+    const text = '[g:vars]\nport="22"\nflag=\'True\'\nlist="[1]"\nname="web"\n';
+    const parsed = parseInventory(text);
+    // Vars sections are verbatim: Ansible literal_evals the rest of the line.
     assert.deepEqual(parsed.serverGroups[0]?.vars, [
       ["port", '"22"'],
       ["flag", "'True'"],
       ["list", '"[1]"'],
-      ["name", "web"],
+      ["name", '"web"'],
     ]);
-    assert.equal(serializeInventory(parsed), '[g:vars]\nport="22"\nflag=\'True\'\nlist="[1]"\nname=web\n');
+    assert.equal(serializeInventory(parsed), `[g]\n\n${text}`);
     const host = parseInventory("[g]\nh p='8080' k='-o A=b -o C=d'\n").serverGroups[0]?.hosts[0];
     assert.deepEqual(host?.vars, [
       ["p", "'8080'"],
       ["k", "-o A=b -o C=d"],
     ]);
+  });
+
+  describe("vars sections are verbatim", () => {
+    it("keeps a list value as written", () => {
+      const parsed = parseInventory('[g]\nh\n[g:vars]\nmylist=["a", "b"]\n');
+      assert.deepEqual(parsed.serverGroups[0]?.vars, [["mylist", '["a", "b"]']]);
+      assert.match(serializeInventory(parsed), /^mylist=\["a", "b"\]$/m);
+    });
+
+    it("keeps a trailing # and ; as part of the value", () => {
+      const parsed = parseInventory("[g]\nh\n[g:vars]\nmsg=hello # trailing\nsemi=a ;b\n");
+      assert.deepEqual(parsed.serverGroups[0]?.vars, [
+        ["msg", "hello # trailing"],
+        ["semi", "a ;b"],
+      ]);
+      assert.deepEqual(parsed.warnings, []);
+      assert.match(serializeInventory(parsed), /^msg=hello # trailing\nsemi=a ;b$/m);
+    });
+
+    it("splits on the first = only and never quotes", () => {
+      const parsed = parseInventory("[g]\nh\n[g:vars]\nk = a=b c\n# whole-line comment\n; another\n");
+      assert.deepEqual(parsed.serverGroups[0]?.vars, [["k", "a=b c"]]);
+      assert.deepEqual(parsed.warnings, ["2 comment line(s) outside manual blocks will be removed"]);
+      assert.match(serializeInventory(parsed), /^k=a=b c$/m);
+    });
+  });
+
+  describe("a group with vars but no hosts", () => {
+    it("keeps the [g] header on a round-trip", () => {
+      assert.equal(serializeInventory(parseInventory("[e]\n[e:vars]\nk=v\n")), "[e]\n\n[e:vars]\nk=v\n");
+    });
+
+    it("keeps the [g] header when its only host is removed", () => {
+      const parsed = parseInventory("[e]\nh1\n[e:vars]\nk=v\n");
+      const group = parsed.serverGroups[0];
+      assert.ok(group);
+      group.hosts = [];
+      assert.equal(serializeInventory(parsed), "[e]\n\n[e:vars]\nk=v\n");
+    });
+
+    it("writes the header of a new group with only vars", () => {
+      const parsed = parseInventory("");
+      parsed.serverGroups.push({ name: "n", hosts: [], vars: [["k", "v"]], readOnly: false });
+      assert.equal(serializeInventory(parsed), "[n]\n\n[n:vars]\nk=v\n");
+    });
+  });
+
+  it("keeps a UTF-8 byte order mark", () => {
+    const parsed = parseInventory("\uFEFF[a]\nh1\n");
+    assert.equal(parsed.bom, true);
+    assert.equal(parsed.serverGroups[0]?.name, "a");
+    assert.equal(serializeInventory(parsed), "\uFEFF[a]\nh1\n");
+    assert.equal(parseInventory("[a]\nh1\n").bom, false);
+    assert.equal(serializeInventory(parseInventory("[a]\nh1\n")), "[a]\nh1\n");
+    const merged = mergeEdits(parsed, { serverGroups: parseInventory("[a]\nh2\n").serverGroups, services: [] });
+    assert.equal(merged.bom, true);
+    assert.equal(serializeInventory(merged), "\uFEFF[a]\nh2\n");
   });
 
   it("keeps CRLF", () => {
@@ -311,6 +370,20 @@ describe("validateInventory", () => {
   it("refuses a host with vars in more than one group", () => {
     assert.equal(errors("[a]\nh1 k=1\n[b]\nh1 k=2\n").length, 1);
     assert.deepEqual(errors("[a]\nh1 k=1\n[b]\nh1\n"), []);
+  });
+
+  it("refuses a host value with both quote kinds, naming host and key", () => {
+    const inventory = parseInventory("[web]\nh1\n");
+    inventory.serverGroups[0]?.hosts[0]?.vars.push(["k", `it's "x"`]);
+    const found = validateInventory(inventory);
+    assert.equal(found.length, 1);
+    assert.match(found[0] ?? "", /h1/);
+    assert.match(found[0] ?? "", /\bk\b/);
+    assert.match(found[0] ?? "", /quote/);
+    // One kind only, or a value kept wrapped from the file, is written as is.
+    assert.deepEqual(errors(`[web]\nh1 a="it's" b='say "x"' c="[1, 'a']"\n`), []);
+    // Group vars are written verbatim, so both kinds are fine there.
+    assert.deepEqual(errors(`[web]\nh1\n[web:vars]\nk=it's "x"\n`), []);
   });
 
   it("reports the parse error", () => {
