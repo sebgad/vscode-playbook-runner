@@ -18,10 +18,12 @@ const {
   existingServiceNames,
   groupHasHosts,
   planService,
+  planWorkspace,
   selectEnvironments,
   starterPlaybook,
   validateServiceName,
 } = require("../src/scaffold");
+const { findEnvironments } = require("../src/discovery");
 const { makeFixture, removeFixture, required } = require("./helpers");
 
 /** A repository with two environments that do not hold the same services. */
@@ -297,4 +299,93 @@ describe("groupHasHosts", () => {
   it("does not count :vars", () => assert.equal(groupHasHosts("[web:vars]\nx=1\n", "web"), false));
   it("counts :children", () => assert.equal(groupHasHosts("[web:children]\nfront\n", "web"), true));
   it("missing group", () => assert.equal(groupHasHosts("[db]\nh\n", "web"), false));
+});
+
+describe("planWorkspace", () => {
+  /** @type {string} */
+  let empty = "";
+
+  beforeEach(() => {
+    empty = makeFixture([], { prefix: "playbook-runner-workspace-" });
+  });
+
+  afterEach(() => {
+    removeFixture(empty);
+  });
+
+  /** @param {import("../src/scaffold").SkeletonPlan} plan */
+  const relatives = (plan) => plan.entries.map((e) => e.relative.split(path.sep).join("/"));
+
+  it("lays out a runnable workspace in an empty folder", () => {
+    const plan = planWorkspace(empty, { environment: "dev", service: "web" });
+    assert.deepEqual(relatives(plan), [
+      "ansible.cfg",
+      "roles",
+      "playbooks/web",
+      "playbooks/web/web.yml",
+      "inventories/dev",
+      "inventories/dev/hosts.ini",
+      "inventories/dev/group_vars/web",
+      "inventories/dev/group_vars/web/env.yml",
+    ]);
+    assert.equal(plan.name, "web");
+    assert.deepEqual(plan.environments, ["dev"]);
+    assert.deepEqual(plan.unknownEnvironments, []);
+    assert.equal(plan.limited, false);
+    createSkeleton(plan);
+    assert.match(
+      fs.readFileSync(path.join(empty, "inventories/dev/hosts.ini"), "utf8"),
+      /^\[web\]\nlocalhost ansible_connection=local /,
+    );
+    assert.equal(fs.readFileSync(path.join(empty, "ansible.cfg"), "utf8"), "[defaults]\nroles_path = roles\n");
+    assert.deepEqual(findEnvironments(empty, {}).map((e) => e.name), ["dev"]);
+  });
+
+  it("keeps an existing ansible.cfg", () => {
+    const folder = makeFixture([["ansible.cfg", "[defaults]\nx = 1\n"]], { prefix: "playbook-runner-workspace-" });
+    try {
+      const plan = planWorkspace(folder, { environment: "dev", service: "web" });
+      assert.equal(entry(plan, "ansible.cfg").exists, true);
+      createSkeleton(plan);
+      assert.equal(fs.readFileSync(path.join(folder, "ansible.cfg"), "utf8"), "[defaults]\nx = 1\n");
+    } finally {
+      removeFixture(folder);
+    }
+  });
+
+  it("allows the same name for environment and service", () => {
+    const rel = relatives(planWorkspace(empty, { environment: "web", service: "web" }));
+    assert.equal(new Set(rel).size, rel.length);
+  });
+
+  it("writes a yaml inventory for a yaml inventory file", () => {
+    const plan = planWorkspace(empty, { environment: "dev", service: "web" }, { inventoryFile: "hosts.yml" });
+    const file = entry(plan, "inventories/dev/hosts.yml");
+    assert.ok((file.content || "").startsWith("all:\n  children:\n    web:"));
+  });
+
+  it("uses the configured directories", () => {
+    const plan = planWorkspace(
+      empty,
+      { environment: "dev", service: "web" },
+      { playbooksDir: "pb", rolesDir: "r", inventoriesDir: "inv", groupVarsDir: "gv", envFileName: "vars.yml" },
+    );
+    const rel = relatives(plan);
+    assert.ok(rel.includes("r"));
+    assert.ok(rel.includes("pb/web"));
+    assert.ok(rel.includes("inv/dev/gv/web/vars.yml"));
+    assert.equal(entry(plan, "ansible.cfg").content, "[defaults]\nroles_path = r\n");
+  });
+
+  it("refuses a folder that has an environment", () => {
+    assert.throws(
+      () => planWorkspace(root, { environment: "dev", service: "web" }),
+      /already has an environment/,
+    );
+  });
+
+  it("refuses bad names", () => {
+    assert.throws(() => planWorkspace(empty, { environment: "a/b", service: "web" }));
+    assert.throws(() => planWorkspace(empty, { environment: "dev", service: "" }));
+  });
 });

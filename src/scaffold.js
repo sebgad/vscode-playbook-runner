@@ -23,6 +23,7 @@ const fs = require("fs");
 const path = require("path");
 
 const DEFAULTS = require("./defaults");
+const { validateEnvironmentName } = require("./environments");
 const { findEnvironments, findPlaybooks, findVaultGroups, isDirectory, isFile } = require("./discovery");
 
 /**
@@ -187,6 +188,30 @@ function groupHasHosts(inventoryText, group) {
 }
 
 /**
+ * An `add(type, target, content?)` that appends a SkeletonEntry to `entries`,
+ * recording whether the target exists right now.
+ *
+ * @param {string} root workspace folder path
+ * @param {SkeletonEntry[]} entries
+ * @returns {(type: "directory" | "file", target: string, content?: string) => void}
+ */
+function entryAdder(root, entries) {
+  return (type, target, content) => {
+    /** @type {SkeletonEntry} */
+    const entry = {
+      type,
+      path: target,
+      relative: path.relative(root, target),
+      exists: type === "directory" ? isDirectory(target) : isFile(target),
+    };
+    if (content) {
+      entry.content = content;
+    }
+    entries.push(entry);
+  };
+}
+
+/**
  * What a new service would consist of: the playbook folder once, and a
  * group_vars folder with an empty env file in each environment that exists
  * right now -- or in each one serviceEnvironments names, when it names any.
@@ -211,25 +236,7 @@ function planService(root, name, settings, opts = {}) {
 
   /** @type {SkeletonEntry[]} */
   const entries = [];
-
-  /**
-   * @param {"directory" | "file"} type
-   * @param {string} target
-   * @param {string} [content]
-   */
-  const add = (type, target, content) => {
-    /** @type {SkeletonEntry} */
-    const entry = {
-      type,
-      path: target,
-      relative: path.relative(root, target),
-      exists: type === "directory" ? isDirectory(target) : isFile(target),
-    };
-    if (content) {
-      entry.content = content;
-    }
-    entries.push(entry);
-  };
+  const add = entryAdder(root, entries);
 
   const playbookDir = path.join(root, config.playbooksDir, service);
   add("directory", playbookDir);
@@ -252,6 +259,62 @@ function planService(root, name, settings, opts = {}) {
     environments: environments.map((item) => item.name),
     unknownEnvironments: unknown,
     limited,
+    entries,
+  };
+}
+
+/**
+ * Everything an empty folder needs to run its first playbook: ansible.cfg,
+ * the roles directory, one service with a starter playbook, and one
+ * environment whose inventory is `localhost` over a local connection.
+ * Refuses a folder that already has an environment. Nothing is written.
+ *
+ * @param {string} root workspace folder path
+ * @param {{ environment: string, service: string }} names
+ * @param {Partial<import("./defaults").Settings>} [settings]
+ * @returns {SkeletonPlan & { environment: string }}
+ */
+function planWorkspace(root, names, settings) {
+  const config = withDefaults(settings);
+  const complaint = validateEnvironmentName(names.environment) || validateServiceName(names.service);
+  if (complaint) {
+    throw new Error(complaint);
+  }
+  const environment = names.environment.trim();
+  const service = names.service.trim();
+  if (findEnvironments(root, config).length) {
+    throw new Error(`${path.basename(root)} already has an environment.`);
+  }
+
+  /** @type {SkeletonEntry[]} */
+  const entries = [];
+  const add = entryAdder(root, entries);
+
+  add("file", path.join(root, "ansible.cfg"), `[defaults]\nroles_path = ${config.rolesDir}\n`);
+  add("directory", path.join(root, config.rolesDir));
+
+  const playbookDir = path.join(root, config.playbooksDir, service);
+  add("directory", playbookDir);
+  add("file", path.join(playbookDir, `${service}.yml`), starterPlaybook(service));
+
+  const inventoryDir = path.join(root, config.inventoriesDir, environment);
+  add("directory", inventoryDir);
+  const yaml = [".yml", ".yaml"].includes(path.extname(config.inventoryFile).toLowerCase());
+  const local = yaml
+    ? `all:\n  children:\n    ${service}:\n      hosts:\n        localhost:\n          ansible_connection: local\n          ansible_python_interpreter: "{{ ansible_playbook_python }}"\n`
+    : `[${service}]\nlocalhost ansible_connection=local ansible_python_interpreter="{{ ansible_playbook_python }}"\n`;
+  add("file", path.join(inventoryDir, config.inventoryFile), local);
+
+  const groupVars = path.join(inventoryDir, config.groupVarsDir, service);
+  add("directory", groupVars);
+  add("file", path.join(groupVars, config.envFileName));
+
+  return {
+    name: service,
+    environment,
+    environments: [environment],
+    unknownEnvironments: [],
+    limited: false,
     entries,
   };
 }
@@ -311,6 +374,7 @@ module.exports = {
   existingServiceNames,
   groupHasHosts,
   planService,
+  planWorkspace,
   selectEnvironments,
   starterPlaybook,
   validateServiceName,
