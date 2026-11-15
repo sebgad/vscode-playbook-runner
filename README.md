@@ -119,6 +119,9 @@ The **Inventory** tab edits the INI inventory of the environment shown:
   group's vault.
 * **Manual sections** — hand-written parts, shown read-only.
 
+Hover a field, a section heading or a known `ansible_*` variable for what it
+means.
+
 ```
 ┌ Inventory · hosts.ini                                                  Open in editor ┐
 │ SERVICES (access control)                                                             │

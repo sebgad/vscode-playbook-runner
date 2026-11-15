@@ -60,6 +60,39 @@
     "ansible_ssh_common_args",
   ];
   const SSH_FIELD_SET = new Set(SSH_FIELDS);
+  /**
+   * What each field means, shown as a tooltip. Keys are Ansible's own variable
+   * names (plus the page's sections), never a group or environment name.
+   *
+   * @type {Record<string, string>}
+   */
+  const FIELD_HELP = {
+    name:
+      "The host's name inside Ansible: shown in the output, used by --limit and host_vars/<name>. " +
+      "It need not be a real hostname — without ansible_host, Ansible connects to it as one.",
+    ansible_host: "The address SSH connects to: a DNS name or an IP address. Empty: the host name is used.",
+    ansible_user: "The login on the remote machine (ssh <user>@…). Empty: your local user or ~/.ssh/config decides.",
+    ansible_port: "The SSH port on the remote machine. Empty: 22.",
+    ansible_ssh_private_key_file:
+      "Path to the private key on this machine used for the login (ssh -i). A path, not the key itself.",
+    ansible_ssh_common_args:
+      "Extra options for every ssh, scp and sftp call, e.g. -o StrictHostKeyChecking=accept-new " +
+      "(accept a new host key, refuse a changed one). Quotes are added when saving.",
+    ansible_python_interpreter: "The Python on the remote machine Ansible uses, e.g. /usr/bin/python3.",
+    ansible_connection: "How Ansible reaches the host: ssh (default), local, docker, …",
+    ansible_become: "Run tasks with privilege escalation (sudo) when true.",
+    ansible_become_user: "The user tasks become when escalating. Default: root.",
+    ansible_become_method: "How to escalate: sudo (default), su, doas, …",
+    ansible_shell_type: "The remote shell type, e.g. sh or powershell.",
+    services:
+      "A service is a [service:children] group. Ticking a server group makes its hosts part of the service, " +
+      "so a playbook with hosts: <service> runs on them.",
+    serverGroups: "Groups that list hosts. Services pick from these.",
+    manual:
+      "Text between '# playbook-runner: manual begin' and '# playbook-runner: manual end' is kept exactly as written and not editable here.",
+    hostVars: "Further variables for this host only, written as key=value on its line.",
+    groupVars: "Variables for every host in this group, written under [<group>:vars].",
+  };
   let uidCounter = 0;
 
   /** @returns {string} */
@@ -2063,7 +2096,7 @@
    * @param {InventoryContext} ctx
    * @param {(draft: Draft) => DraftVar[] | undefined} varsOf
    * @param {DraftVar[]} vars
-   * @param {{ editable: boolean, keyBase: string, groupName: string, title: string }} spec
+   * @param {{ editable: boolean, keyBase: string, groupName: string, title: string, help: string }} spec
    */
   function varsEditor(ctx, varsOf, vars, spec) {
     const repeated = repeatedKeys(vars);
@@ -2072,7 +2105,8 @@
         ? null
         : h(
             "div",
-            { class: "var-row" },
+            // A known Ansible variable explains itself on hover; own variables have no tooltip.
+            { class: "var-row", title: key.startsWith("ansible_") ? FIELD_HELP[key] : undefined },
             draftInput(ctx, {
               key: `${spec.keyBase}:k:${index}`,
               value: key,
@@ -2119,7 +2153,7 @@
     return h(
       "div",
       { class: "vars-editor" },
-      h("div", { class: "sub-head" }, spec.title),
+      h("div", { class: "sub-head help", title: spec.help }, spec.title),
       shown.length ? shown : h("p", { class: "note" }, "None."),
       spec.editable
         ? h(
@@ -2383,7 +2417,7 @@
       h(
         "div",
         { class: "inv-section-head" },
-        h("h2", null, "Services (access control)"),
+        h("h2", { class: "help", title: FIELD_HELP.services }, "Services (access control)"),
         h("span", { class: "spacer" }),
         ctx.canEdit
           ? h(
@@ -2505,8 +2539,8 @@
         { class: "host-form" },
         h(
           "label",
-          { class: "form-field" },
-          h("span", { class: "form-label" }, "name"),
+          { class: "form-field", title: FIELD_HELP.name },
+          h("span", { class: "form-label help" }, "name"),
           draftInput(ctx, {
             key: `${keyBase}:name`,
             value: host.name,
@@ -2525,8 +2559,8 @@
         SSH_FIELDS.map((field) =>
           h(
             "label",
-            { class: "form-field" },
-            h("span", { class: "form-label" }, field),
+            { class: "form-field", title: FIELD_HELP[field] },
+            h("span", { class: "form-label help" }, field),
             draftInput(ctx, {
               key: `${keyBase}:ssh:${field}`,
               value: getSsh(host.vars, field),
@@ -2550,7 +2584,7 @@
             return target ? target.vars : undefined;
           },
           host.vars,
-          { editable, keyBase: `${keyBase}:var`, groupName: group.name, title: "Other variables" },
+          { editable, keyBase: `${keyBase}:var`, groupName: group.name, title: "Other variables", help: FIELD_HELP.hostVars },
         ),
       ),
     );
@@ -2629,7 +2663,7 @@
                   return target ? target.vars : undefined;
                 },
                 group.vars,
-                { editable, keyBase: `inv:${group.uid}:var`, groupName: group.name, title: "Group variables" },
+                { editable, keyBase: `inv:${group.uid}:var`, groupName: group.name, title: "Group variables", help: FIELD_HELP.groupVars },
               ),
             )
           : null,
@@ -2642,7 +2676,7 @@
       h(
         "div",
         { class: "inv-section-head" },
-        h("h2", null, "Server groups"),
+        h("h2", { class: "help", title: FIELD_HELP.serverGroups }, "Server groups"),
         ctx.draft && !ctx.frozen ? h("span", { class: "note" }, "Rename and delete: save or discard first.") : null,
         h("span", { class: "spacer" }),
         ctx.canEdit
@@ -2676,7 +2710,7 @@
     return h(
       "section",
       { class: "inv-section" },
-      h("div", { class: "inv-section-head" }, h("h2", null, "Manual sections")),
+      h("div", { class: "inv-section-head" }, h("h2", { class: "help", title: FIELD_HELP.manual }, "Manual sections")),
       blocks.map((block) =>
         h(
           "div",

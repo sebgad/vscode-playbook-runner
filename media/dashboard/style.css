@@ -1103,6 +1103,13 @@ input.mono {
   font-family: var(--mono);
 }
 
+/* A label with a tooltip explaining it. */
+.help {
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
 input[type="text"][readonly] {
   opacity: 0.75;
 }
