@@ -479,6 +479,15 @@ tree without a reload.
     editor can reach the trash, and there is deliberately no fallback to a
     permanent delete. The webview only says *which* environment; a new
     name is always asked for by the extension.
+22. ✅ moved out of `homelab-infra/scripts/vscode-extension` into its own
+    repository, `vscode-playbook-runner`, with its history (`git subtree
+    split`). Nothing in the extension depended on where it sat -- the
+    range plugin is found through `context.extensionPath` -- so only the
+    development setup moved: `F5` opens `../homelab-infra`, and the
+    range-plugin tests look for this repository's `.venv` before `PATH`.
+    The design documents under `docs/superpowers/` and the Claude skills
+    and agent came along as plain copies; their history stays in
+    homelab-infra. Earlier steps keep the old path where they name it.
 
 ## 10. Verification
 

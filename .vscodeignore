@@ -1,6 +1,9 @@
 # Everything that is development-only. What ships is extension.js, src/,
 # media/, package.json and the README.
 .vscode/**
+.claude/**
+docs/**
+.venv/**
 .gitignore
 .vscodeignore
 dist/**

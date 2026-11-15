@@ -5,6 +5,10 @@
   "version": "0.4.0",
   "publisher": "sebgad",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sebgad/vscode-playbook-runner.git"
+  },
   "engines": {
     "vscode": "^1.93.0"
   },
@@ -23,7 +27,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test",
     "check": "npm run lint && npm run typecheck && npm test",
-    "package": "node -e \"require('node:fs').mkdirSync('dist', { recursive: true })\" && vsce package --no-dependencies --allow-missing-repository --out dist/",
+    "package": "node -e \"require('node:fs').mkdirSync('dist', { recursive: true })\" && vsce package --no-dependencies --out dist/",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
   },
   "devDependencies": {

@@ -1,7 +1,7 @@
 /**
  * End-to-end tests for the task-range strategy plugin.
  *
- * These run the real ansible-playbook -- the repository's .venv first, then
+ * These run the real ansible-playbook -- this repository's .venv first, then
  * PATH -- with the env buildPlaybookEnv produces, against throwaway playbooks
  * on `localhost,` with `connection: local` whose every task is a `debug`. No
  * repository inventory, no vault, no host is touched. Without an
@@ -25,7 +25,7 @@ const PLUGIN_DIR = path.resolve(__dirname, "../ansible/strategy");
 
 /** @returns {string | null} */
 function findAnsiblePlaybook() {
-  const venv = path.resolve(__dirname, "../../../.venv/bin/ansible-playbook");
+  const venv = path.resolve(__dirname, "../.venv/bin/ansible-playbook");
   if (fs.existsSync(venv)) {
     return venv;
   }

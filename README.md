@@ -318,7 +318,6 @@ Two ways to install it:
 **As a package.** Build a `.vsix` and hand it to VS Code:
 
 ```bash
-cd scripts/vscode-extension
 npm install          # dev tooling only; the extension itself has no dependencies
 npm run package      # -> dist/playbook-runner-<version>.vsix
 code --install-extension dist/playbook-runner-0.4.0.vsix
@@ -327,7 +326,7 @@ code --install-extension dist/playbook-runner-0.4.0.vsix
 **As a symlink**, if you would rather have `git pull` be the update mechanism:
 
 ```bash
-ln -s ~/Programmierprojekte/homelab-infra/scripts/vscode-extension \
+ln -s ~/Programmierprojekte/vscode-playbook-runner \
       ~/.vscode/extensions/playbook-runner-0.4.0
 ```
 
@@ -392,7 +391,9 @@ The modules marked above import nothing from `vscode`, which is what lets
 `node --test` cover the parts that decide what ends up on an ansible command
 line. The rest is the editor surface.
 
-`F5` opens an Extension Development Host with the repository loaded. Logs land
+`F5` opens an Extension Development Host with `../homelab-infra` loaded —
+the Ansible repository checked out beside this one; edit
+`.vscode/launch.json` to point it elsewhere. Logs land
 in *Help → Toggle Developer Tools → Console*.
 
 ```bash
